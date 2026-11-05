@@ -61,24 +61,33 @@ const seconds = (s, dflt) => (s ? parseFloat(String(s)) * 1000 : dflt);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Opens Google's picker in `win` (a window opened synchronously from the click
- * so popup blockers allow it), waits for the user to finish, and returns the
- * picked photo items.
+ * Starts a Google Photos picking session, opens Google's picker (in `win`, a
+ * window opened synchronously from the click so popup blockers allow it, or via
+ * the link handed to `onLink` when no window could be opened), waits for the
+ * user to tap Done, and returns the picked items.
+ * The picker may open in the Google Photos app on phones and the browser window
+ * may close right away, so a closed window is NOT treated as "cancelled" — only
+ * the `signal` (Cancel button) or Google's own timeout ends the wait.
  */
-export async function pick(win, onStatus) {
+export async function pick(win, onStatus, { signal, onLink } = {}) {
   const session = await api('POST', '/sessions', { pickingConfig: { maxItemCount: '2000' } });
   try {
-    win.location.href = session.pickerUri + '/autoclose';
-    onStatus('Waiting for you to finish selecting in the Google Photos window…');
+    const uri = session.pickerUri + '/autoclose';
+    if (win && !win.closed) {
+      win.location.href = uri;
+      onStatus('Waiting for you to tap Done in Google Photos… (this page keeps waiting, even if Google Photos opens in its app)');
+    } else {
+      onLink?.(uri); // popup blocked: show a link instead
+    }
     const interval = seconds(session.pollingConfig?.pollInterval, 4000);
     const deadline = Date.now() + seconds(session.pollingConfig?.timeoutIn, 30 * 60 * 1000);
-    let closedPolls = 0;
     let s = session;
     while (!s.mediaItemsSet) {
+      if (signal?.aborted) throw new Error('Picking cancelled.');
       if (Date.now() > deadline) throw new Error('The Google Photos picker timed out. Please try again.');
       await wait(Math.max(1500, interval));
+      if (signal?.aborted) throw new Error('Picking cancelled.');
       s = await api('GET', `/sessions/${session.id}`);
-      if (!s.mediaItemsSet && win.closed && ++closedPolls > 3) throw new Error('The picker was closed before any photos were chosen.');
     }
     onStatus('Getting the list of photos you picked…');
     const items = [];

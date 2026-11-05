@@ -216,14 +216,29 @@ function setupGoogle() {
       status('Signed in. Now choose your photos.');
     } catch (e) { status(e.message); }
   };
+  let picking = null; // AbortController while waiting for Google's picker
   $('#g-pick').onclick = async () => {
+    if (picking) { picking.abort(); return; } // button acts as "Cancel" while waiting
     if (importing) return;
     if (!G.isSignedIn()) { status('Your sign-in expired. Sign in again.'); $('#g-pick').disabled = true; $('#g-signin').textContent = 'Sign in with Google'; return; }
-    const win = window.open('about:blank', 'gphotos-picker', 'width=1100,height=800');
-    if (!win) { status('Your browser blocked the Google Photos window. Allow pop-ups for this site and try again.'); return; }
+    const win = window.open('about:blank', '_blank');
+    picking = new AbortController();
+    $('#g-pick').textContent = 'Cancel';
     let session;
     try {
-      session = await G.pick(win, status);
+      session = await G.pick(win, status, {
+        signal: picking.signal,
+        onLink: (uri) => {
+          const box = $('#g-status');
+          box.innerHTML = '';
+          const a = document.createElement('a');
+          a.href = uri; a.target = '_blank'; a.rel = 'noopener';
+          a.textContent = 'Open Google Photos to choose your photos';
+          box.append(a, ' — then tap Done there and come back to this page.');
+        },
+      });
+      picking = null;
+      $('#g-pick').textContent = 'Choose photos';
       if (session.videos) toast(`Skipped ${session.videos} video${session.videos === 1 ? "" : "s"}. Only photos can go in the PDFs.`, 6000);
       if (!session.items.length) { status("No photos were selected, only videos."); return; }
       status(`Downloading ${session.items.length} photos…`);
@@ -240,8 +255,10 @@ function setupGoogle() {
       status(e.message);
       progress(0, 0);
     } finally {
+      picking = null;
+      $('#g-pick').textContent = 'Choose photos';
       if (session) G.endSession(session.sessionId);
-      try { if (!win.closed) win.close(); } catch {}
+      try { if (win && !win.closed) win.close(); } catch {}
     }
   };
 }
