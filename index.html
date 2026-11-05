@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Our Timeline</title>
+  <meta name="description" content="Turn your photos into an I-130 relationship timeline and a keepsake. Runs entirely in your browser.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="hero">
+    <p class="eyebrow">I-130 relationship timeline</p>
+    <h1>Our Timeline</h1>
+    <p>Turn your photos into a clear, printable timeline for your petition — and a beautiful keepsake for the two of you.</p>
+    <p class="privacy">🔒 Everything happens in this browser. Your photos are never uploaded to any server.</p>
+  </header>
+
+  <main>
+    <section class="card" id="s-details">
+      <h2><span class="num">1</span> About you</h2>
+      <div class="grid2">
+        <label>Petitioner (U.S. citizen or green card holder)<input data-field="petitioner" autocomplete="name"></label>
+        <label>Beneficiary (your spouse)<input data-field="beneficiary"></label>
+        <label>Receipt number <span class="muted">(optional)</span><input data-field="receipt" placeholder="e.g. IOE0912345678"></label>
+        <label>Keepsake title<input data-field="title" placeholder="Our Story"></label>
+      </div>
+    </section>
+
+    <section class="card" id="s-photos">
+      <h2><span class="num">2</span> Add photos</h2>
+      <div class="sources">
+        <div class="source">
+          <h3>From Google Photos</h3>
+          <p>Sign in, then open your album in Google's window and select the photos you want — up to 2,000 at a time. You can come back and add more.</p>
+          <div class="row">
+            <button id="g-signin" class="primary">Sign in with Google</button>
+            <button id="g-pick" disabled>Choose photos</button>
+          </div>
+          <p class="muted small" id="g-status"></p>
+        </div>
+        <div class="source">
+          <h3>From files</h3>
+          <p>Photos you downloaded, an unzipped Google Takeout folder, or a .zip file.</p>
+          <div class="row">
+            <label class="btn">Choose files<input type="file" id="f-files" accept="image/*,.zip,.json" multiple hidden></label>
+            <label class="btn ghost">Choose a folder<input type="file" id="f-folder" webkitdirectory multiple hidden></label>
+          </div>
+          <p class="muted small">Or drop files anywhere on this page.</p>
+        </div>
+      </div>
+      <div id="progress" hidden><div class="bar"><span></span></div><p id="progress-text" class="small"></p></div>
+      <p id="photo-summary" class="muted"></p>
+    </section>
+
+    <section class="card" id="s-timeline">
+      <h2><span class="num">3</span> Your timeline</h2>
+      <p class="muted">Photos are grouped by date. Give each group a name and a place, and add events that have no photos, like how you met, your lease or a joint bank account.
+        <span class="legend"><b class="k-filing">★</b> filing PDF <b class="k-keep">♥</b> keepsake only.</span> Tap a photo to always include it or leave it out.</p>
+      <div class="row">
+        <button id="add-event">+ Add an event</button>
+        <button class="ghost" id="regroup">Regroup photos by date</button>
+      </div>
+      <div id="events"></div>
+    </section>
+
+    <section class="card" id="s-check">
+      <h2><span class="num">4</span> Check for gaps</h2>
+      <ul id="warnings"></ul>
+    </section>
+
+    <section class="card" id="s-export">
+      <h2><span class="num">5</span> Print</h2>
+      <div class="grid3">
+        <label>Filing photos per event<input type="number" min="1" max="10" data-setting="filingPerEvent"></label>
+        <label>Most filing photos overall<input type="number" min="5" max="300" data-setting="filingMax"></label>
+        <label>Keepsake photos per event<input type="number" min="1" max="500" data-setting="keepsakePerEvent"></label>
+      </div>
+      <div class="row">
+        <button id="pdf-filing" class="primary">Download filing PDF</button>
+        <button id="pdf-keepsake" class="primary alt">Download keepsake PDF</button>
+      </div>
+      <p class="muted small"><b>Filing PDF:</b> cover page, timeline table, exhibit index, and labeled photos two per page. Prints well in black and white. <b>Keepsake:</b> a designed photo book of your story.</p>
+      <p class="small" id="export-status" role="status"></p>
+
+      <h3>Your project</h3>
+      <p class="muted small">Your work is saved in this browser automatically. Save a project file to back it up or continue on another device.</p>
+      <div class="row">
+        <button class="ghost" id="save-project">Save project file</button>
+        <label class="btn ghost">Open project file<input type="file" id="open-project" accept=".zip" hidden></label>
+        <button class="ghost danger" id="clear-all">Start over</button>
+      </div>
+    </section>
+
+    <p class="disclaimer">This tool helps you organize evidence. It is not legal advice and is not affiliated with USCIS. Check every date against your documents before filing.</p>
+  </main>
+
+  <dialog id="photo-dialog">
+    <form method="dialog" class="dlg">
+      <div class="dlg-img"><img id="dlg-img" alt="Selected photo"></div>
+      <div class="dlg-side">
+        <p id="dlg-meta" class="muted small"></p>
+        <label>Caption (who, where, what)<input id="dlg-caption" placeholder="With Mom at our engagement dinner"></label>
+        <label>Event<select id="dlg-event"></select></label>
+        <div class="seg" id="dlg-pick" role="group" aria-label="Include this photo">
+          <button type="button" data-pick="pinned">Always include</button>
+          <button type="button" data-pick="auto">Let it choose</button>
+          <button type="button" data-pick="excluded">Leave out</button>
+        </div>
+        <div class="row">
+          <button type="button" id="dlg-prev" class="ghost">‹ Prev</button>
+          <button type="button" id="dlg-next" class="ghost">Next ›</button>
+          <button value="close" class="primary">Done</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>
