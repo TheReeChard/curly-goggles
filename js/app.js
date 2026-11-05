@@ -14,7 +14,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 const state = {
   project: { petitioner: '', beneficiary: '', receipt: '', title: '', story: '' },
-  settings: { filingPerEvent: 3, filingMax: 60, keepsakePerEvent: 12, autoAI: true, aiProvider: 'anthropic', aiModels: {}, placeNames: true, findPeople: true },
+  settings: { filingPerEvent: 3, filingMax: 60, keepsakePerEvent: 12, autoAI: true, aiProvider: 'anthropic', aiModels: {}, placeNames: true, findPeople: true, autoCounts: true },
   photos: [],
   events: [],
   people: [],
@@ -356,7 +356,20 @@ function refresh() {
   save();
 }
 
+function renderCounts() {
+  const auto = state.settings.autoCounts;
+  $('#auto-counts').checked = auto;
+  $('#manual-counts').hidden = auto;
+  const f = state.photos.filter((p) => p.filing).length;
+  const k = state.photos.filter((p) => p.keepsake).length;
+  const ev = state.events.filter((e) => e.exhibit).length;
+  $('#count-summary').textContent = auto
+    ? `Right now: ${f} photos in the filing PDF (1–4 per event, more for the wedding, engagement and big trips; never more than about 60 in total) and ${k} in the keepsake (the sharp, well-lit shots, more for big events). Pin or leave out any photo to change it.`
+    : `Using your own numbers: ${f} filing photos across ${ev} events, ${k} keepsake photos.`;
+}
+
 function renderSummary() {
+  renderCounts();
   const n = state.photos.length;
   const f = state.photos.filter((p) => p.filing).length;
   const k = state.photos.filter((p) => p.keepsake).length;
@@ -720,6 +733,7 @@ async function boot() {
   setupDialog();
   setupGoogle();
   setupAI();
+  $('#auto-counts').onchange = (e) => { state.settings.autoCounts = e.target.checked; refresh(); };
   $('#people-scan').onclick = () => autoFaces(true);
   $('#find-people').checked = state.settings.findPeople;
   $('#find-people').onchange = (e) => { state.settings.findPeople = e.target.checked; save(); if (e.target.checked) autoFaces(); };

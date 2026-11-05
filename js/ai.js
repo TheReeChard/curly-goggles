@@ -4,7 +4,7 @@
 // when they turn this on.
 import { db } from './db.js';
 import { decode, resize, toBlob, toDataURL, hamming } from './images.js';
-import { EVENT_TYPES, fmtRange, ymd } from './curate.js';
+import { EVENT_TYPES, fmtRange, ymd, limits } from './curate.js';
 
 const MAX_CANDIDATES = 20; // photos sent per event
 
@@ -250,7 +250,8 @@ function coupleLine(P) {
 async function reviewEvent(provider, apiKey, model, state, e) {
   const all = state.photos.filter((p) => p.eventId === e.id);
   const list = shortlist(all);
-  const k = Math.min(list.length, Math.max(state.settings.keepsakePerEvent, state.settings.filingPerEvent));
+  const lim = limits(state, e, all.length);
+  const k = Math.min(list.length, Math.max(lim.keepsake, lim.filing));
   const P = state.project;
   const known = [
     coupleLine(P),

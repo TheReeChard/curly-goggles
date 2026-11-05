@@ -131,8 +131,31 @@ function pickFrom(list, k, strict, aiReviewed) {
 }
 
 /** Recompute which photos go in the filing PDF / keepsake, and exhibit labels. */
+// ---- How many photos per event (automatic unless the couple overrides) ----
+// Filing: what matters to an officer is coverage of every stage, not volume,
+// so each event gets 1-4 photos depending on how important the event type is
+// and how many photos there are; the whole packet stays around 20-60 photos.
+// Keepsake: keeps the good shots, more for big events (grows with the square
+// root of the photo count, up to 30), skipping blurry/dark ones.
+const FILING_BY_TYPE = { wedding: 4, engagement: 3, 'first-meeting': 3, 'moved-in': 3, child: 3, family: 3, trip: 3, met: 2, visit: 2, lease: 2 };
+export function limits(state, e, n) {
+  const s = state.settings;
+  if (!s.autoCounts) return { filing: s.filingPerEvent, keepsake: s.keepsakePerEvent };
+  const byType = FILING_BY_TYPE[e?.type] ?? 2;
+  const filing = Math.max(1, Math.min(n, byType, 1 + Math.floor(Math.log2(n + 1))));
+  const keepsake = Math.max(1, Math.min(n, 30, Math.round(2 + 1.8 * Math.sqrt(n))));
+  return { filing, keepsake };
+}
+export function filingCap(state) {
+  const s = state.settings;
+  if (!s.autoCounts) return s.filingMax;
+  const withPhotos = state.events.filter((e) => state.photos.some((p) => p.eventId === e.id)).length;
+  return Math.max(20, Math.min(60, withPhotos * 3));
+}
+
 export function select(state) {
-  const { filingPerEvent, filingMax, keepsakePerEvent } = state.settings;
+  const filingMax = filingCap(state);
+  const auto = state.settings.autoCounts;
   const byEvent = new Map(state.events.map((e) => [e.id, []]));
   for (const p of state.photos) {
     p.filing = p.keepsake = false;
@@ -141,9 +164,13 @@ export function select(state) {
   }
   const filingByEvent = new Map();
   const reviewed = new Set(state.events.filter((e) => e.aiReviewed).map((e) => e.id));
+  const eventById = new Map(state.events.map((e) => [e.id, e]));
   for (const [id, list] of byEvent) {
-    filingByEvent.set(id, pickFrom(list, filingPerEvent, true, reviewed.has(id)));
-    for (const p of pickFrom(list, keepsakePerEvent, false, reviewed.has(id))) p.keepsake = true;
+    const lim = limits(state, eventById.get(id), list.length);
+    filingByEvent.set(id, pickFrom(list, lim.filing, true, reviewed.has(id)));
+    // In automatic mode, leave out blurry/dark shots from the keepsake unless pinned or chosen by AI.
+    const good = auto ? list.filter((p) => p.pick === 'pinned' || p.aiRank != null || p.score >= 0.35) : list;
+    for (const p of pickFrom(good.length ? good : list, lim.keepsake, false, reviewed.has(id))) p.keepsake = true;
   }
   // Global cap for the filing set: trim lowest-scoring auto picks, keeping ≥1 per event.
   let total = [...filingByEvent.values()].reduce((n, l) => n + l.length, 0);

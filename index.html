@@ -108,7 +108,9 @@
 
     <section class="card" id="s-export">
       <h2><span class="num">5</span> Print</h2>
-      <div class="grid3">
+      <label class="check"><input type="checkbox" id="auto-counts"> Choose how many photos to use automatically (recommended)</label>
+      <p class="muted small" id="count-summary"></p>
+      <div class="grid3" id="manual-counts">
         <label>Filing photos per event<input type="number" min="1" max="10" data-setting="filingPerEvent"></label>
         <label>Most filing photos overall<input type="number" min="5" max="300" data-setting="filingMax"></label>
         <label>Keepsake photos per event<input type="number" min="1" max="500" data-setting="keepsakePerEvent"></label>
