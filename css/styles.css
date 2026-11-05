@@ -73,6 +73,14 @@ label.btn.ghost { color: var(--ink); }
 .sources { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
 .source { border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
 .source p { margin: 0 0 12px; }
+.ai-box { margin-top: 14px; background: color-mix(in srgb, var(--accent) 6%, var(--card)); }
+.checks { display: grid; gap: 6px; align-content: end; }
+label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; color: var(--ink); }
+label.check input { width: auto; }
+.ai-box .row { margin: 12px 0 4px; }
+.story { margin-top: 14px; }
+input.ai, textarea.ai { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--field)); }
+.chip { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--accent); }
 #progress { margin-top: 16px; }
 .bar { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; }
 .bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }

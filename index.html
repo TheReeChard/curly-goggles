@@ -31,6 +31,7 @@
         <label>Receipt number <span class="muted">(optional)</span><input data-field="receipt" placeholder="e.g. IOE0912345678"></label>
         <label>Keepsake title<input data-field="title" placeholder="Our Story"></label>
       </div>
+      <label class="story">Keepsake introduction <span class="muted">(optional; AI can write it)</span><textarea data-field="story" rows="3" placeholder="A few sentences about your story, for the first page of the keepsake."></textarea></label>
     </section>
 
     <section class="card" id="s-photos">
@@ -54,6 +55,20 @@
           </div>
           <p class="muted small">Or drop files anywhere on this page.</p>
         </div>
+      </div>
+      <div class="source ai-box">
+        <h3>✨ Let AI choose the best photos and write the text</h3>
+        <p>Claude looks at a shortlist of photos from each event (up to 20, sent as small copies), picks the best poses and angles, removes repeats, and drafts a title, a short description and captions. It also writes the intro page of your keepsake. You review and edit everything.</p>
+        <div class="grid2">
+          <label>Anthropic API key<input id="ai-key" type="password" autocomplete="off" placeholder="sk-ant-…"></label>
+          <div class="checks">
+            <label class="check"><input type="checkbox" id="ai-remember"> Remember the key on this device</label>
+            <label class="check"><input type="checkbox" id="ai-auto"> Run automatically after adding photos</label>
+          </div>
+        </div>
+        <div class="row"><button id="ai-run" class="primary">✨ Choose &amp; write with AI</button></div>
+        <p class="muted small" id="ai-status"></p>
+        <p class="muted small">Only when you use this, the shortlisted copies go to Anthropic to be analyzed. Nothing else leaves your browser. Get a key at console.anthropic.com. It is billed to your Anthropic account, roughly $1–3 for 1,000 photos.</p>
       </div>
       <div id="progress" hidden><div class="bar"><span></span></div><p id="progress-text" class="small"></p></div>
       <p id="photo-summary" class="muted"></p>

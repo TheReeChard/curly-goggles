@@ -184,6 +184,17 @@ export async function keepsakePdf(state, onProgress) {
   }
   doc.setDrawColor(...ACCENT).setLineWidth(0.8).line(PAGE_W / 2 - 30, 665, PAGE_W / 2 + 30, 665);
 
+  // Introduction page
+  if (P.story?.trim()) {
+    doc.addPage();
+    paper(doc);
+    doc.setFont('times', 'italic').setFontSize(15).setTextColor(...INK);
+    const lines = doc.splitTextToSize(P.story.trim(), CW - 120);
+    const h = lines.length * 15 * 1.6;
+    doc.text(lines, PAGE_W / 2, (PAGE_H - h) / 2, { align: 'center', lineHeightFactor: 1.6 });
+    doc.setDrawColor(...ACCENT).setLineWidth(0.8).line(PAGE_W / 2 - 30, (PAGE_H + h) / 2 + 20, PAGE_W / 2 + 30, (PAGE_H + h) / 2 + 20);
+  }
+
   // Events
   let y = PAGE_H;
   const bottom = PAGE_H - 56;

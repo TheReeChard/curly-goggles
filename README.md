@@ -17,6 +17,17 @@ Nothing is uploaded. Photos are processed in your browser and saved only on that
 4. **Check for gaps:** the tool flags missing evidence of living together or shared finances, long gaps, and dates that don't add up.
 5. **Download** the filing PDF and the keepsake PDF.
 
+### ✨ AI mode (optional)
+
+Paste an Anthropic API key (from <https://console.anthropic.com/>) and the tool does the curating and writing for you:
+
+- For each event, Claude looks at a shortlist of up to 20 photos (small copies) and ranks the best ones: both of you in frame, clear faces, good poses, variety, no repeats or screenshots.
+- It drafts the event title, type and description, a caption for each chosen photo, and the intro page of the keepsake.
+- It can run automatically right after you add photos, or per event with "✨ Choose & write with AI".
+- AI-written text is highlighted and flagged under "Check for gaps" until you edit or confirm it. It is told never to invent names, places or dates, but **you must review everything before filing.**
+
+Privacy: the shortlisted photo copies are sent to Anthropic only when AI mode runs. Your key stays in this browser, and is saved only if you tick "Remember". Cost is billed to your Anthropic account, roughly $1–3 for 1,000 photos.
+
 You can pin any photo ("Always include") or leave it out. Use "Save project file" to back up your work or move it to another device.
 
 ## Hosting (GitHub Pages)

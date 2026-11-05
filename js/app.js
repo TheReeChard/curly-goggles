@@ -4,14 +4,15 @@ import * as G from './google.js';
 import { fromFiles } from './importers.js';
 import { EVENT_TYPES, regroup, select, checks, fmtRange, fmtDate, ymd, uid, sortEvents } from './curate.js';
 import { filingPdf, keepsakePdf } from './pdf.js';
+import { runAI, key as aiKey } from './ai.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const state = {
-  project: { petitioner: '', beneficiary: '', receipt: '', title: '' },
-  settings: { filingPerEvent: 3, filingMax: 60, keepsakePerEvent: 12 },
+  project: { petitioner: '', beneficiary: '', receipt: '', title: '', story: '' },
+  settings: { filingPerEvent: 3, filingMax: 60, keepsakePerEvent: 12, autoAI: true },
   photos: [],
   events: [],
 };
@@ -102,6 +103,49 @@ async function importItems(items, getBlob) {
   refresh();
   progress(0, 0);
   toast(`Added ${done - failed} photo${done - failed === 1 ? '' : 's'}${failed ? ` (${failed} couldn't be read)` : ''}.`);
+  if (currentKey() && state.settings.autoAI) await doAI();
+}
+
+// ---------- AI ----------
+let sessionKey = '';
+const currentKey = () => sessionKey || aiKey.get();
+let aiRunning = false;
+async function doAI(only) {
+  const status = (t) => { $('#ai-status').textContent = t; };
+  const k = currentKey();
+  if (!k) { status('Add your Anthropic API key first.'); $('#ai-key').focus(); return; }
+  if (aiRunning || importing) return;
+  if (!state.photos.length) { status('Add photos first.'); return; }
+  aiRunning = true;
+  $$('#ai-run, [data-act=ai]').forEach((b) => (b.disabled = true));
+  try {
+    const res = await runAI(state, k, { only, onProgress: (d, t, text) => { progress(d, t, text); status(text); } });
+    regroup(state);
+    refresh();
+    status(res.errors.length
+      ? `Finished with problems: ${res.errors.join(' ')}`
+      : `AI chose photos and drafted text for ${res.reviewed} event(s). Everything marked ✨ is a draft — please read it.`);
+  } catch (e) {
+    status(e.message);
+  } finally {
+    aiRunning = false;
+    progress(0, 0);
+    $$('#ai-run, [data-act=ai]').forEach((b) => (b.disabled = false));
+  }
+}
+function setupAI() {
+  const input = $('#ai-key'), remember = $('#ai-remember');
+  const saved = aiKey.get();
+  if (saved) { input.value = saved; remember.checked = true; }
+  const apply = () => {
+    sessionKey = input.value.trim();
+    aiKey.set(remember.checked ? sessionKey : '');
+  };
+  input.onchange = apply;
+  remember.onchange = apply;
+  $('#ai-auto').checked = state.settings.autoAI;
+  $('#ai-auto').onchange = (e) => { state.settings.autoAI = e.target.checked; save(); };
+  $('#ai-run').onclick = () => { apply(); doAI(); };
 }
 
 async function handleFiles(files) {
@@ -169,6 +213,8 @@ function refresh() {
   renderEvents();
   renderChecks();
   renderSummary();
+  $('[data-field=story]').value = state.project.story || '';
+  $('[data-field=story]').classList.toggle('ai', !!state.project.storyAI);
   save();
 }
 
@@ -203,7 +249,7 @@ function renderEvents() {
     const nf = ps.filter((p) => p.filing).length, nk = ps.filter((p) => p.keepsake).length;
     return `<article class="event${e.auto ? ' auto' : ''}" data-id="${e.id}">
       <div class="ev-head">
-        <input class="ev-title" data-k="title" value="${esc(e.title)}" placeholder="Name this event" aria-label="Event name">
+        <input class="ev-title${e.ai?.title ? ' ai' : ''}" data-k="title" value="${esc(e.title)}" placeholder="Name this event" aria-label="Event name">
         <select data-k="type" aria-label="Event type">${opts.replace(`value="${e.type}"`, `value="${e.type}" selected`)}</select>
       </div>
       <div class="ev-fields">
@@ -211,12 +257,14 @@ function renderEvents() {
         <label>To<input type="date" data-k="end" value="${esc(e.end)}"></label>
         <label class="grow">Where<input data-k="location" value="${esc(e.location)}" placeholder="City, country"></label>
       </div>
-      <textarea data-k="description" rows="2" placeholder="What happened? Who was there?">${esc(e.description)}</textarea>
+      <textarea class="${e.ai?.description ? 'ai' : ''}" data-k="description" rows="2" placeholder="What happened? Who was there?">${esc(e.description)}</textarea>
       <input data-k="documents" value="${esc(e.documents)}" placeholder="Documents for this event (e.g. boarding passes, lease, receipts)">
       ${ps.length ? `<div class="strip">${show.map(photoTile).join('')}</div>` : ''}
       <div class="ev-foot">
         <span class="muted">${fmtRange(e.start, e.end)} · ${ps.length} photo${ps.length === 1 ? '' : 's'}${ps.length ? ` · ★ ${nf} · ♥ ${nk}` : ''}${e.exhibit ? ` · Exhibit ${e.exhibit}` : ''}</span>
         <span class="row">
+          ${Object.values(e.ai || {}).some(Boolean) ? '<span class="chip">✨ AI draft</span>' : ''}
+          ${ps.length ? `<button class="ghost sm" data-act="ai">✨ ${e.aiReviewed ? 'Redo' : 'Choose & write'} with AI</button>` : ''}
           ${ps.length > 24 ? `<button class="ghost sm" data-act="expand">${expanded.has(e.id) ? 'Show fewer' : `Show all ${ps.length}`}</button>` : ''}
           ${idx > 0 ? '<button class="ghost sm" data-act="merge">Merge into previous</button>' : ''}
           <button class="ghost sm danger" data-act="delete">Delete</button>
@@ -236,6 +284,7 @@ function onEventInput(ev) {
   const k = el.dataset.k;
   e[k] = el.value;
   e.auto = false;
+  if (e.ai?.[k]) { e.ai[k] = false; el.classList.remove('ai'); }
   card.classList.remove('auto');
   if (k === 'start' && e.end && e.end < e.start) e.end = e.start;
   if (k === 'start' || k === 'end') {
@@ -257,6 +306,7 @@ function onEventClick(ev) {
   if (!act || !card) return;
   const i = state.events.findIndex((x) => x.id === card.dataset.id);
   const e = state.events[i];
+  if (act === 'ai') { doAI([e.id]); return; }
   if (act === 'expand') { expanded.has(e.id) ? expanded.delete(e.id) : expanded.add(e.id); renderEvents(); return; }
   if (act === 'merge') {
     const prev = state.events[i - 1];
@@ -291,15 +341,17 @@ async function openPhoto(id) {
   $('#dlg-img').src = await thumbUrl(id, 'full');
   const faces = p.faces == null ? 'faces: not checked' : `${p.faces} face${p.faces === 1 ? '' : 's'}`;
   $('#dlg-meta').textContent = `${p.takenAt ? fmtDate(ymd(p.takenAt)) : 'Date unknown'}${p.dateGuessed ? ' (guessed)' : ''} · ${faces} · sharpness ${Math.round(p.sharp * 100)}% · score ${Math.round(p.score * 100)}`
-    + (p.filing ? ` · Exhibit ${p.exhibit}` : p.keepsake ? ' · keepsake' : ' · not chosen');
+    + (p.filing ? ` · Exhibit ${p.exhibit}` : p.keepsake ? ' · keepsake' : ' · not chosen')
+    + (p.aiRank != null ? ` · AI pick #${p.aiRank + 1}` : '');
   $('#dlg-caption').value = p.caption || '';
+  $('#dlg-caption').classList.toggle('ai', !!p.captionAI);
   $('#dlg-event').innerHTML = state.events.map((e) => `<option value="${e.id}"${e.id === p.eventId ? ' selected' : ''}>${esc(e.title)} — ${esc(fmtRange(e.start, e.end))}</option>`).join('');
   $$('#dlg-pick button').forEach((b) => b.classList.toggle('on', b.dataset.pick === p.pick));
   if (!dlg.open) dlg.showModal();
 }
 function setupDialog() {
   const dlg = $('#photo-dialog');
-  $('#dlg-caption').oninput = (e) => { current.caption = e.target.value; save(); };
+  $('#dlg-caption').oninput = (e) => { current.caption = e.target.value; current.captionAI = false; e.target.classList.remove('ai'); renderChecks(); save(); };
   $('#dlg-event').onchange = (e) => { current.eventId = e.target.value; current.eventLocked = true; refresh(); openPhoto(current.id); };
   $('#dlg-pick').onclick = (e) => {
     const b = e.target.closest('[data-pick]');
@@ -396,7 +448,7 @@ async function clearAll() {
   await db.clear('blobs');
   await db.clear('meta');
   urlCache.clear();
-  Object.assign(state, { photos: [], events: [], project: { petitioner: '', beneficiary: '', receipt: '', title: '' } });
+  Object.assign(state, { photos: [], events: [], project: { petitioner: '', beneficiary: '', receipt: '', title: '', story: '' } });
   fillForms();
   refresh();
 }
@@ -420,7 +472,13 @@ function toast(text, ms = 4000) {
 async function boot() {
   await load();
   fillForms();
-  $$('[data-field]').forEach((el) => { el.oninput = () => { state.project[el.dataset.field] = el.value; save(); }; });
+  $$('[data-field]').forEach((el) => {
+    el.oninput = () => {
+      state.project[el.dataset.field] = el.value;
+      if (el.dataset.field === 'story') { state.project.storyAI = false; el.classList.remove('ai'); renderChecks(); }
+      save();
+    };
+  });
   $$('[data-setting]').forEach((el) => {
     el.onchange = () => {
       const v = Math.max(1, Math.round(Number(el.value) || 1));
@@ -442,7 +500,8 @@ async function boot() {
     $('#events .ev-title')?.focus();
   };
   $('#regroup').onclick = () => {
-    for (const p of state.photos) if (!p.eventLocked) p.eventId = null;
+    const autoIds = new Set(state.events.filter((e) => e.auto).map((e) => e.id));
+    for (const p of state.photos) if (!p.eventLocked && (!p.eventId || autoIds.has(p.eventId))) p.eventId = null;
     regroup(state);
     refresh();
   };
@@ -453,6 +512,7 @@ async function boot() {
   $('#clear-all').onclick = clearAll;
   setupDialog();
   setupGoogle();
+  setupAI();
   if (!db.persistent) toast('This browser is blocking storage, so your work won\'t be saved between visits. Use "Save project file".', 9000);
   refresh();
 }

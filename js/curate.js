@@ -67,7 +67,7 @@ export function regroup(state) {
   for (const p of state.photos) {
     if (p.eventId && manualIds.has(p.eventId) && p.eventLocked) continue;
     const m = manual.find((e) => inRange(p.takenAt, e));
-    if (m) { p.eventId = m.id; continue; }
+    if (m) { if (p.eventId !== m.id) m.aiReviewed = false; p.eventId = m.id; continue; }
     if (p.eventId && manualIds.has(p.eventId)) continue;
     loose.push(p);
   }
@@ -112,9 +112,14 @@ function similar(a, b, strict) {
   return strict && a.takenAt && b.takenAt && Math.abs(a.takenAt - b.takenAt) < 90_000 && h <= 22;
 }
 
-function pickFrom(list, k, strict) {
+// Ranking: photos the AI ranked come first (in its order); after an AI review,
+// photos it didn't choose are only used if the couple pins them.
+const rankScore = (p) => (p.aiRank != null ? 2 - p.aiRank * 0.01 : p.score);
+
+function pickFrom(list, k, strict, aiReviewed) {
   const pinned = list.filter((p) => p.pick === 'pinned');
-  const rest = list.filter((p) => p.pick !== 'pinned' && p.pick !== 'excluded').sort((a, b) => b.score - a.score);
+  const rest = list.filter((p) => p.pick !== 'pinned' && p.pick !== 'excluded' && (!aiReviewed || p.aiRank != null || p.eventLocked))
+    .sort((a, b) => rankScore(b) - rankScore(a));
   const out = [...pinned];
   for (const p of rest) {
     if (out.length >= Math.max(k, pinned.length)) break;
@@ -134,9 +139,10 @@ export function select(state) {
     if (byEvent.has(p.eventId)) byEvent.get(p.eventId).push(p);
   }
   const filingByEvent = new Map();
+  const reviewed = new Set(state.events.filter((e) => e.aiReviewed).map((e) => e.id));
   for (const [id, list] of byEvent) {
-    filingByEvent.set(id, pickFrom(list, filingPerEvent, true));
-    for (const p of pickFrom(list, keepsakePerEvent, false)) p.keepsake = true;
+    filingByEvent.set(id, pickFrom(list, filingPerEvent, true, reviewed.has(id)));
+    for (const p of pickFrom(list, keepsakePerEvent, false, reviewed.has(id))) p.keepsake = true;
   }
   // Global cap for the filing set: trim lowest-scoring auto picks, keeping ≥1 per event.
   let total = [...filingByEvent.values()].reduce((n, l) => n + l.length, 0);
@@ -144,7 +150,7 @@ export function select(state) {
     let worst = null, worstList = null;
     for (const l of filingByEvent.values()) {
       if (l.length <= 1) continue;
-      for (const p of l) if (p.pick !== 'pinned' && (!worst || p.score < worst.score)) { worst = p; worstList = l; }
+      for (const p of l) if (p.pick !== 'pinned' && (!worst || rankScore(p) < rankScore(worst))) { worst = p; worstList = l; }
     }
     if (!worst) break;
     worstList.splice(worstList.indexOf(worst), 1);
@@ -196,6 +202,10 @@ export function checks(state) {
   if (generic.length) out.push({ level: 'info', text: `${generic.length} photo group(s) still have a generic name. Give each one a short title (e.g. "Visit to Lagos for Christmas").` });
   const undated = state.photos.filter((p) => p.takenAt == null || p.dateGuessed).length;
   if (undated) out.push({ level: 'info', text: `${undated} photo(s) had no date in the file, so their dates are guesses. Check them or move them to the right event.` });
+  const aiText = state.events.reduce((n, e) => n + Object.values(e.ai || {}).filter(Boolean).length, 0)
+    + state.photos.filter((p) => p.captionAI && (p.filing || p.keepsake)).length
+    + (state.project.storyAI && state.project.story ? 1 : 0);
+  if (aiText) out.push({ level: 'warn', text: `${aiText} title(s), description(s) or caption(s) were written by AI. Read each one and correct anything that isn't exactly right — you are responsible for what you file. (AI-written text is marked ✨.)` });
   const nFiling = state.photos.filter((p) => p.filing).length;
   if (nFiling > 80) out.push({ level: 'warn', text: `${nFiling} photos in the filing PDF. A focused set (about 20–60) is easier for an officer to review.` });
   if (!out.some((o) => o.level === 'warn')) out.push({ level: 'ok', text: 'No major gaps found. Still double-check every date against your documents.' });
