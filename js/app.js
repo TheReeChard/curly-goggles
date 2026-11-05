@@ -4,7 +4,7 @@ import * as G from './google.js';
 import { fromFiles } from './importers.js';
 import { EVENT_TYPES, regroup, select, checks, fmtRange, fmtDate, ymd, uid, sortEvents } from './curate.js';
 import { filingPdf, keepsakePdf } from './pdf.js';
-import { runAI, key as aiKey } from './ai.js';
+import { runAI, key as aiKey, PROVIDERS } from './ai.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -12,7 +12,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 const state = {
   project: { petitioner: '', beneficiary: '', receipt: '', title: '', story: '' },
-  settings: { filingPerEvent: 3, filingMax: 60, keepsakePerEvent: 12, autoAI: true },
+  settings: { filingPerEvent: 3, filingMax: 60, keepsakePerEvent: 12, autoAI: true, aiProvider: 'anthropic', aiModels: {} },
   photos: [],
   events: [],
 };
@@ -107,24 +107,27 @@ async function importItems(items, getBlob) {
 }
 
 // ---------- AI ----------
-let sessionKey = '';
-const currentKey = () => sessionKey || aiKey.get();
+const sessionKeys = {};
+const provider = () => state.settings.aiProvider || 'anthropic';
+const currentKey = () => sessionKeys[provider()] || aiKey.get(provider());
 let aiRunning = false;
 async function doAI(only) {
   const status = (t) => { $('#ai-status').textContent = t; };
   const k = currentKey();
-  if (!k) { status('Add your Anthropic API key first.'); $('#ai-key').focus(); return; }
+  const P = PROVIDERS[provider()];
+  if (!k) { status(`Add your ${P.label} API key first.`); $('#ai-key').focus(); return; }
   if (aiRunning || importing) return;
   if (!state.photos.length) { status('Add photos first.'); return; }
   aiRunning = true;
   $$('#ai-run, [data-act=ai]').forEach((b) => (b.disabled = true));
   try {
-    const res = await runAI(state, k, { only, onProgress: (d, t, text) => { progress(d, t, text); status(text); } });
+    const model = $('#ai-model').value || state.settings.aiModels?.[provider()];
+    const res = await runAI(state, { provider: provider(), apiKey: k, model, only, onProgress: (d, t, text) => { progress(d, t, text); status(text); } });
     regroup(state);
     refresh();
     status(res.errors.length
       ? `Finished with problems: ${res.errors.join(' ')}`
-      : `AI chose photos and drafted text for ${res.reviewed} event(s). Everything marked ✨ is a draft — please read it.`);
+      : `${P.label} chose photos and drafted text for ${res.reviewed} event(s). Everything marked ✨ is a draft — please read it.`);
   } catch (e) {
     status(e.message);
   } finally {
@@ -133,19 +136,51 @@ async function doAI(only) {
     $$('#ai-run, [data-act=ai]').forEach((b) => (b.disabled = false));
   }
 }
-function setupAI() {
-  const input = $('#ai-key'), remember = $('#ai-remember');
-  const saved = aiKey.get();
-  if (saved) { input.value = saved; remember.checked = true; }
-  const apply = () => {
-    sessionKey = input.value.trim();
-    aiKey.set(remember.checked ? sessionKey : '');
+async function loadModels() {
+  const pid = provider();
+  const P = PROVIDERS[pid];
+  const sel = $('#ai-model');
+  const k = currentKey();
+  const saved = state.settings.aiModels?.[pid];
+  const fill = (ids, note) => {
+    sel.innerHTML = ids.map((id) => `<option${id === saved ? ' selected' : ''}>${esc(id)}</option>`).join('') || '<option value="">—</option>';
+    $('#ai-model-note').textContent = note || '';
   };
-  input.onchange = apply;
+  if (!k && pid !== 'anthropic') return fill([], 'Enter your key to see the available models.');
+  try {
+    fill(await P.listModels(k), pid === 'anthropic' ? '' : 'Pick the newest full-size model for the best results.');
+  } catch (e) {
+    fill(saved ? [saved] : [], e.message);
+  }
+}
+function setupAI() {
+  const input = $('#ai-key'), remember = $('#ai-remember'), pick = $('#ai-provider');
+  state.settings.aiModels ||= {};
+  pick.innerHTML = Object.values(PROVIDERS).map((P) => `<option value="${P.id}">${esc(P.label)}</option>`).join('');
+  const showProvider = () => {
+    const P = PROVIDERS[provider()];
+    pick.value = P.id;
+    const saved = aiKey.get(P.id);
+    input.value = sessionKeys[P.id] || saved;
+    input.placeholder = P.keyHint;
+    remember.checked = !!saved;
+    $('#ai-key-label').textContent = `${P.label} API key`;
+    $('#ai-key-url').textContent = P.keyUrl;
+    $('#ai-who').textContent = P.label.replace(/ \(.*/, '');
+    loadModels();
+  };
+  const apply = () => {
+    sessionKeys[provider()] = input.value.trim();
+    aiKey.set(provider(), remember.checked ? sessionKeys[provider()] : '');
+  };
+  pick.onchange = () => { state.settings.aiProvider = pick.value; save(); showProvider(); };
+  input.onchange = () => { apply(); loadModels(); };
   remember.onchange = apply;
+  $('#ai-model').onchange = (e) => { state.settings.aiModels[provider()] = e.target.value; save(); };
   $('#ai-auto').checked = state.settings.autoAI;
   $('#ai-auto').onchange = (e) => { state.settings.autoAI = e.target.checked; save(); };
   $('#ai-run').onclick = () => { apply(); doAI(); };
+  showProvider();
 }
 
 async function handleFiles(files) {
