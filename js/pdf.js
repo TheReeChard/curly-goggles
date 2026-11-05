@@ -1,6 +1,6 @@
 // PDF output: a plain, printable filing packet and a designed keepsake.
 import { db } from './db.js';
-import { decode, resize, toBlob, toDataURL } from './images.js';
+import { decode, resize, toBlob, toDataURL, sliceRanges, sliceData } from './images.js';
 import { peopleText } from './people.js';
 import { fmtDate, fmtRange, typeLabel, ymd } from './curate.js';
 
@@ -26,12 +26,29 @@ function names(project) {
 }
 
 // ===================== Filing packet =====================
+// Attachments (e.g. long chat screenshots), decoded and split into pieces.
+const docsOf = (state, e) => (state.docs || []).filter((d) => d.eventId === e.id);
+async function prepareDocs(state, colAspect) {
+  const out = new Map();
+  for (const d of state.docs || []) {
+    const blob = await db.get('blobs', `doc:${d.id}`);
+    if (!blob) continue;
+    const img = await decode(blob);
+    out.set(d.id, { img, ranges: sliceRanges(img, colAspect) });
+  }
+  return out;
+}
+
 export async function filingPdf(state, onProgress) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
   const P = state.project;
   const events = state.events;
   const photos = state.photos.filter((p) => p.filing);
+  const DOC_TOP = M + 28, DOC_H = PAGE_H - M - 40 - DOC_TOP, DOC_W = (CW - 24) / 2;
+  onProgress?.('Preparing screenshots…');
+  const docParts = await prepareDocs(state, DOC_W / DOC_H);
+  const docPages = (d) => Math.ceil((docParts.get(d.id)?.ranges.length || 0) / 2);
 
   // Cover
   doc.setFont('times', 'bold').setFontSize(24);
@@ -72,14 +89,16 @@ export async function filingPdf(state, onProgress) {
   header();
   doc.setFont('helvetica', 'normal').setFontSize(9);
   for (const e of events) {
-    const n = state.photos.filter((p) => p.eventId === e.id && p.filing).length;
+    const np = state.photos.filter((p) => p.eventId === e.id && p.filing).length;
+    const nd = docsOf(state, e).length;
+    const n = np + nd;
     const details = [e.description, e.documents && `Documents: ${e.documents}`].filter(Boolean).join('\n');
     const cells = [
       fmtRange(e.start, e.end),
       `${e.title}${e.type && e.type !== 'other' ? `\n(${typeLabel(e.type)})` : ''}`,
       e.location || '—',
       details || '—',
-      n ? `${e.exhibit}-1${n > 1 ? ` to ${e.exhibit}-${n}` : ''}\n(${n} photo${n > 1 ? 's' : ''})` : '—',
+      n ? `${e.exhibit}-1${n > 1 ? ` to ${e.exhibit}-${n}` : ''}\n(${[np && `${np} photo${np > 1 ? 's' : ''}`, nd && `${nd} document${nd > 1 ? 's' : ''}`].filter(Boolean).join(', ')})` : '—',
     ];
     const lines = cells.map((c, i) => doc.splitTextToSize(String(c), cols[i][1] - 8));
     const h = Math.max(...lines.map((l) => l.length)) * 11 + 8;
@@ -95,9 +114,9 @@ export async function filingPdf(state, onProgress) {
   }
 
   // Exhibit index
-  if (photos.length) {
+  if (photos.length || (state.docs || []).length) {
     doc.addPage();
-    doc.setFont('helvetica', 'bold').setFontSize(14).text('Index of Photographic Exhibits', M, M + 4);
+    doc.setFont('helvetica', 'bold').setFontSize(14).text('Index of Exhibits', M, M + 4);
     y = M + 28;
     doc.setFontSize(9);
     for (const e of events.filter((ev) => ev.exhibit)) {
@@ -111,6 +130,13 @@ export async function filingPdf(state, onProgress) {
         doc.text(line, M + 14, y);
         y += line.length * 11;
       }
+      for (const d of docsOf(state, e)) {
+        if (y > PAGE_H - M) { doc.addPage(); y = M; }
+        const k = docPages(d);
+        const line = doc.splitTextToSize(`${d.exhibit}   ${d.caption || d.name} (${k} page${k === 1 ? '' : 's'})`, CW - 14);
+        doc.text(line, M + 14, y);
+        y += line.length * 11;
+      }
       y += 8;
     }
   }
@@ -118,11 +144,13 @@ export async function filingPdf(state, onProgress) {
   // Photo pages: two per page, with labels
   const slotH = (PAGE_H - 2 * M - 20) / 2;
   const imgH = slotH - 46;
-  const ordered = events.flatMap((e) =>
-    state.photos.filter((p) => p.eventId === e.id && p.filing).sort((a, b) => a.exhibit.localeCompare(b.exhibit, undefined, { numeric: true })).map((p) => [p, e]));
+  const total = photos.length;
+  let count = 0;
+  for (const e of events) {
+  const ordered = state.photos.filter((p) => p.eventId === e.id && p.filing).sort((a, b) => a.exhibit.localeCompare(b.exhibit, undefined, { numeric: true }));
   for (let i = 0; i < ordered.length; i++) {
-    const [p, e] = ordered[i];
-    onProgress?.(`Adding photo ${i + 1} of ${ordered.length}…`);
+    const p = ordered[i];
+    onProgress?.(`Adding photo ${++count} of ${total}…`);
     if (i % 2 === 0) doc.addPage();
     const top = M + (i % 2) * (slotH + 20);
     const data = await imgData(p, 1600);
@@ -135,6 +163,30 @@ export async function filingPdf(state, onProgress) {
     doc.setFont('helvetica', 'normal');
     const cap = [photoDate(p), e.location, e.title, p.caption || peopleText(state, p)].filter(Boolean).join(' · ');
     doc.text(doc.splitTextToSize(cap, CW - 70), M + 70, top + imgH + 16);
+  }
+  // Attachments: long screenshots split into two columns per page.
+  for (const d of docsOf(state, e)) {
+    const part = docParts.get(d.id);
+    if (!part) continue;
+    const W = part.img.naturalWidth || part.img.width;
+    const pages = Math.ceil(part.ranges.length / 2);
+    for (let i = 0; i < part.ranges.length; i++) {
+      if (i % 2 === 0) {
+        doc.addPage();
+        doc.setFont('helvetica', 'bold').setFontSize(10).setTextColor(0);
+        doc.text(`Exhibit ${d.exhibit}`, M, M + 4);
+        doc.setFont('helvetica', 'normal');
+        doc.text(doc.splitTextToSize(`${d.caption || d.name} · ${e.title} (${fmtRange(e.start, e.end)}) · page ${i / 2 + 1} of ${pages}`, CW - 70), M + 70, M + 4);
+      }
+      const [y0, y1] = part.ranges[i];
+      const h = DOC_W * ((y1 - y0) / W);
+      const x = M + (i % 2) * (DOC_W + 24);
+      doc.addImage(sliceData(part.img, y0, y1, 900), 'JPEG', x, DOC_TOP, DOC_W, h, `d${d.id}${i}`, 'FAST');
+      doc.setDrawColor(190).setLineWidth(0.5).rect(x, DOC_TOP, DOC_W, h);
+      doc.setFontSize(8).setTextColor(110).text(`${i + 1}/${part.ranges.length}`, x + DOC_W / 2, DOC_TOP + h + 12, { align: 'center' });
+      doc.setTextColor(0);
+    }
+  }
   }
 
   // Footer
@@ -366,19 +418,46 @@ export async function keepsakePdf(state, onProgress) {
     pendingMilestones = [];
   }
 
+  // ---- Chat screenshots in phone frames, two per page ----
+  const PH_W = (KCW - 50) / 2, PH_H = CH - 80, PH_PAD = 9;
+  const phoneParts = await prepareDocs(state, (PH_W - 2 * PH_PAD) / (PH_H - 2 * PH_PAD - 16));
+  function phonePages(d, label) {
+    const part = phoneParts.get(d.id);
+    if (!part) return;
+    const W = part.img.naturalWidth || part.img.width;
+    for (let i = 0; i < part.ranges.length; i++) {
+      if (i % 2 === 0) {
+        page(label);
+        doc.setFont('times', 'italic').setFontSize(15).setTextColor(...ACCENT);
+        doc.text(d.caption || 'Our messages', PAGE_W / 2, top + 12, { align: 'center' });
+      }
+      const [y0, y1] = part.ranges[i];
+      const iw = PH_W - 2 * PH_PAD, ih = iw * ((y1 - y0) / W);
+      const x = KM + 12 + (i % 2) * (PH_W + 26), y = top + 34 + (i % 2) * 18;
+      const fh = ih + 2 * PH_PAD + 16;
+      alpha(0.18);
+      doc.setFillColor(40, 30, 25).roundedRect(x + 3, y + 4, PH_W, fh, 20, 20, 'F');
+      alpha(1);
+      doc.setFillColor(34, 30, 28).roundedRect(x, y, PH_W, fh, 20, 20, 'F');
+      doc.setFillColor(70, 64, 60).roundedRect(x + PH_W / 2 - 18, y + 6, 36, 5, 2.5, 2.5, 'F'); // speaker
+      doc.addImage(sliceData(part.img, y0, y1, 800), 'JPEG', x + PH_PAD, y + PH_PAD + 12, iw, ih, `p${d.id}${i}`, 'FAST');
+    }
+  }
+
   // ---- Chapters ----
   let chapter = 0;
   for (const e of state.events) {
     const list = state.photos.filter((p) => p.eventId === e.id && p.keepsake).sort((a, b) => (a.takenAt || 0) - (b.takenAt || 0));
-    if (!list.length) { if (e.title || e.description) pendingMilestones.push(e); continue; }
+    const docs = docsOf(state, e);
+    if (!list.length && !docs.length) { if (e.title || e.description) pendingMilestones.push(e); continue; }
     flushMilestones();
     chapter++;
     const label = e.title || typeLabel(e.type);
     const lead = best(list);
     page(label);
     // Opener: full-bleed lead photo, then the chapter text.
-    const heroH = 400;
-    await image(lead, 0, 0, PAGE_W, heroH);
+    const heroH = lead ? 400 : 120;
+    if (lead) await image(lead, 0, 0, PAGE_W, heroH);
     let y = heroH + 44;
     doc.setFont('helvetica', 'bold').setFontSize(8.5).setTextColor(...ACCENT);
     doc.text(`C H A P T E R   ${String(chapter).padStart(2, '0')}     ·     ${fmtRange(e.start, e.end).toUpperCase()}`, KM, y);
@@ -406,6 +485,7 @@ export async function keepsakePdf(state, onProgress) {
       rest = rest.slice(k);
     }
     await layoutPages(rest, label);
+    for (const d of docs) phonePages(d, label);
   }
   flushMilestones();
 

@@ -27,6 +27,15 @@ After you add photos, the app finds the faces in them and groups the same person
 
 Face recognition runs only in your browser; no faces or photos are uploaded. The first run downloads about 12 MB of models.
 
+### Screenshots and document images
+
+Each event has **📎 Attach a screenshot**, for example your first conversation. Long screenshots (like a 1080×13,669 scrolling capture) are split into page-sized pieces automatically, cutting in the blank space between messages so no message is cut in half.
+
+- **Filing PDF:** the screenshot gets its own exhibit number (e.g. Exhibit A-4), two columns per page, with "page 1 of 3" and piece numbers.
+- **Keepsake:** shown inside phone frames.
+
+Screenshots are never sent to AI.
+
 ### Keepsake design
 
 Full-photo cover, story page, a chapter opener for each event, then pages that rotate through several layouts (feature, mosaic, grid, side-by-side, full page and tilted polaroids with captions), a milestones timeline for events without photos, and a closing page. The filing PDF stays plain and easy to read, as USCIS expects.

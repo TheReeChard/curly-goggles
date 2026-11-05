@@ -18,6 +18,7 @@ const state = {
   photos: [],
   events: [],
   people: [],
+  docs: [],
 };
 
 // ---------- persistence ----------
@@ -26,8 +27,8 @@ function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try {
-      const { photos, events, project, settings, people } = state;
-      await db.put('meta', 'state', JSON.parse(JSON.stringify({ photos, events, project, settings, people })));
+      const { photos, events, project, settings, people, docs } = state;
+      await db.put('meta', 'state', JSON.parse(JSON.stringify({ photos, events, project, settings, people, docs })));
     } catch (e) { console.warn('save failed', e); }
   }, 400);
 }
@@ -397,6 +398,17 @@ function renderEvents() {
       <textarea class="${e.ai?.description ? 'ai' : ''}" data-k="description" rows="2" placeholder="What happened? Who was there?">${esc(e.description)}</textarea>
       <input data-k="documents" value="${esc(e.documents)}" placeholder="Documents for this event (e.g. boarding passes, lease, receipts)">
       ${ps.length ? `<div class="strip">${show.map(photoTile).join('')}</div>` : ''}
+      <div class="docs">
+        ${(state.docs || []).filter((d) => d.eventId === e.id).map((d) => `<div class="doc" data-doc="${d.id}">
+          <img alt="" data-docimg="${d.id}">
+          <div class="pmeta">
+            <input data-doc-caption value="${esc(d.caption)}" placeholder="What is this? e.g. Our first conversation on Messenger">
+            <span class="muted small">${d.exhibit ? `Exhibit ${d.exhibit} · ` : ''}${d.w}×${d.h}px · split into pages automatically</span>
+          </div>
+          <button class="ghost sm danger" data-act="doc-remove" title="Remove">✕</button>
+        </div>`).join('')}
+        <label class="btn ghost sm">📎 Attach a screenshot<input type="file" accept="image/*" multiple hidden data-attach></label>
+      </div>
       <div class="ev-foot">
         <span class="muted">${fmtRange(e.start, e.end)} · ${ps.length} photo${ps.length === 1 ? '' : 's'}${ps.length ? ` · ★ ${nf} · ♥ ${nk}` : ''}${e.exhibit ? ` · Exhibit ${e.exhibit}` : ''}</span>
         <span class="row">
@@ -410,10 +422,48 @@ function renderEvents() {
     </article>`;
   }).join('') || '<p class="muted">Your events will appear here after you add photos, or add one yourself.</p>';
   $$('img[data-id]', box).forEach((img) => io.observe(img));
+  $$('img[data-docimg]', box).forEach((img) => docUrl(img.dataset.docimg).then((u) => { img.src = u; }));
 }
 
 // ---------- event editing ----------
+// ---------- attachments (screenshots / document images) ----------
+async function docUrl(id) {
+  const k = `doc:${id}`;
+  if (urlCache.has(k)) return urlCache.get(k);
+  const blob = await db.get('blobs', k);
+  const url = blob ? URL.createObjectURL(blob) : '';
+  urlCache.set(k, url);
+  return url;
+}
+async function attachDocs(e, files) {
+  for (const f of files) {
+    try {
+      const bmp = await decode(f);
+      const d = { id: uid(), eventId: e.id, name: f.name, type: f.type || 'image/png', w: bmp.naturalWidth || bmp.width, h: bmp.naturalHeight || bmp.height, caption: '' };
+      bmp.close?.();
+      await db.put('blobs', `doc:${d.id}`, f);
+      state.docs.push(d);
+    } catch (err) {
+      toast(`Couldn't open ${f.name}: ${err.message}`, 6000);
+    }
+  }
+  refresh();
+}
+
 function onEventInput(ev) {
+  if (ev.target.matches('[data-attach]')) {
+    const card = ev.target.closest('.event');
+    const e = state.events.find((x) => x.id === card.dataset.id);
+    attachDocs(e, [...ev.target.files]);
+    ev.target.value = '';
+    return;
+  }
+  if (ev.target.matches('[data-doc-caption]')) {
+    const d = state.docs.find((x) => x.id === ev.target.closest('[data-doc]').dataset.doc);
+    d.caption = ev.target.value.trim();
+    save();
+    return;
+  }
   const el = ev.target.closest('[data-k]');
   const card = ev.target.closest('.event');
   if (!el || !card) return;
@@ -444,10 +494,18 @@ function onEventClick(ev) {
   const i = state.events.findIndex((x) => x.id === card.dataset.id);
   const e = state.events[i];
   if (act === 'ai') { doAI([e.id]); return; }
+  if (act === 'doc-remove') {
+    const id = ev.target.closest('[data-doc]').dataset.doc;
+    state.docs = state.docs.filter((d) => d.id !== id);
+    db.del('blobs', `doc:${id}`);
+    refresh();
+    return;
+  }
   if (act === 'expand') { expanded.has(e.id) ? expanded.delete(e.id) : expanded.add(e.id); renderEvents(); return; }
   if (act === 'merge') {
     const prev = state.events[i - 1];
     for (const p of state.photos) if (p.eventId === e.id) { p.eventId = prev.id; p.eventLocked = true; }
+    for (const d of state.docs) if (d.eventId === e.id) d.eventId = prev.id;
     if (e.start && (!prev.start || e.start < prev.start)) prev.start = e.start;
     const end = e.end || e.start;
     if (end && (!prev.end || end > prev.end)) prev.end = end;
@@ -459,6 +517,8 @@ function onEventClick(ev) {
     if (!confirm(n ? `Delete "${e.title}"? Its ${n} photos will be regrouped by date, not deleted.` : `Delete "${e.title}"?`)) return;
     state.events.splice(i, 1);
     for (const p of state.photos) if (p.eventId === e.id) { p.eventId = null; p.eventLocked = false; }
+    for (const d of state.docs.filter((x) => x.eventId === e.id)) db.del('blobs', `doc:${d.id}`);
+    state.docs = state.docs.filter((x) => x.eventId !== e.id);
     regroup(state);
   }
   refresh();
@@ -538,8 +598,12 @@ async function saveProject() {
   const status = (t) => { $('#export-status').textContent = t; };
   status('Packing your project…');
   const zip = new window.JSZip();
-  const { photos, events, project, settings, people } = state;
-  zip.file('project.json', JSON.stringify({ version: 1, photos, events, project, settings, people }));
+  const { photos, events, project, settings, people, docs } = state;
+  zip.file('project.json', JSON.stringify({ version: 1, photos, events, project, settings, people, docs }));
+  for (const d of docs || []) {
+    const b = await db.get('blobs', `doc:${d.id}`);
+    if (b) zip.file(`docs/${d.id}`, b);
+  }
   let i = 0;
   for (const p of photos) {
     const full = await db.get('blobs', `full:${p.id}`);
@@ -572,7 +636,11 @@ async function openProject(file) {
       if (thumb) await db.put('blobs', `thumb:${p.id}`, new Blob([await thumb.async('arraybuffer')], { type: 'image/jpeg' }));
       if (++i % 50 === 0) status(`Loading photos… ${i} of ${data.photos.length}`);
     }
-    Object.assign(state, { photos: data.photos, events: data.events, people: data.people || [], project: data.project, settings: { ...state.settings, ...data.settings } });
+    for (const d of data.docs || []) {
+      const f = zip.file(`docs/${d.id}`);
+      if (f) await db.put('blobs', `doc:${d.id}`, new Blob([await f.async('arraybuffer')], { type: d.type || 'image/png' }));
+    }
+    Object.assign(state, { photos: data.photos, events: data.events, people: data.people || [], docs: data.docs || [], project: data.project, settings: { ...state.settings, ...data.settings } });
     fillForms();
     refresh();
     status('Project loaded.');
@@ -586,7 +654,7 @@ async function clearAll() {
   await db.clear('blobs');
   await db.clear('meta');
   urlCache.clear();
-  Object.assign(state, { photos: [], events: [], people: [], project: { petitioner: '', beneficiary: '', receipt: '', title: '', story: '' } });
+  Object.assign(state, { photos: [], events: [], people: [], docs: [], project: { petitioner: '', beneficiary: '', receipt: '', title: '', story: '' } });
   fillForms();
   refresh();
 }

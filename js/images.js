@@ -169,3 +169,63 @@ export async function analyze(canvas) {
     score: +score.toFixed(4),
   };
 }
+
+// ---------- Long screenshots ----------
+/**
+ * Split a tall image (e.g. a long chat screenshot) into pieces whose shape
+ * fits `colAspect` (width / height of the column it will be printed in).
+ * Cuts are placed on the calmest row (blank space between messages) in the
+ * last 25% of each piece, so messages aren't cut in half.
+ * Returns [[y0, y1], ...] in source pixels.
+ */
+export function sliceRanges(img, colAspect) {
+  const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
+  const target = Math.round(W / colAspect);
+  if (H <= target * 1.06) return [[0, H]];
+  const s = Math.min(1, 270 / W);
+  const sw = Math.max(1, Math.round(W * s)), sh = Math.max(1, Math.round(H * s));
+  const c = document.createElement('canvas');
+  c.width = sw; c.height = sh;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, sw, sh);
+  const d = ctx.getImageData(0, 0, sw, sh).data;
+  const busy = new Float32Array(sh);
+  for (let y = 0; y < sh; y++) {
+    let sum = 0, sq = 0;
+    for (let x = 0; x < sw; x++) {
+      const i = (y * sw + x) * 4;
+      const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      sum += g; sq += g * g;
+    }
+    const m = sum / sw;
+    busy[y] = Math.sqrt(Math.max(0, sq / sw - m * m));
+  }
+  const out = [];
+  let y0 = 0;
+  while (H - y0 > target * 1.06) {
+    const lo = Math.floor((y0 + target * 0.75) * s), hi = Math.min(sh - 1, Math.floor((y0 + target) * s));
+    let best = hi, bestV = Infinity;
+    for (let y = hi; y >= lo; y--) { // prefer the lowest calm row (fuller pieces)
+      const v = busy[y] + (hi - y) * 0.02;
+      if (v < bestV) { bestV = v; best = y; }
+    }
+    const cut = Math.round(best / s);
+    out.push([y0, cut]);
+    y0 = cut;
+  }
+  out.push([y0, H]);
+  return out;
+}
+
+/** Render rows y0..y1 of `img` to a JPEG data URL at most `maxW` pixels wide. */
+export function sliceData(img, y0, y1, maxW) {
+  const W = img.naturalWidth || img.width;
+  const s = Math.min(1, maxW / W);
+  const c = document.createElement('canvas');
+  c.width = Math.round(W * s);
+  c.height = Math.max(1, Math.round((y1 - y0) * s));
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, y0, W, y1 - y0, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.9);
+}

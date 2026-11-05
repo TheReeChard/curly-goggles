@@ -116,6 +116,11 @@ input.ai, textarea.ai { border-color: color-mix(in srgb, var(--accent) 55%, var(
 .pmeta { display: grid; gap: 5px; min-width: 0; flex: 1; }
 .pmeta select, .pmeta input { padding: 5px 8px; font-size: 13px; }
 
+.docs { display: grid; gap: 8px; }
+.doc { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 6px; }
+.doc img { width: 44px; height: 64px; object-fit: cover; object-position: top; border-radius: 6px; background: var(--line); flex: none; }
+.docs > label.btn { justify-self: start; }
+
 #warnings { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 #warnings li { padding: 10px 12px 10px 36px; border-radius: 10px; border: 1px solid var(--line); position: relative; }
 #warnings li::before { position: absolute; left: 12px; top: 10px; }

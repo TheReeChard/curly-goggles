@@ -161,8 +161,10 @@ export function select(state) {
   let letter = 0;
   for (const e of state.events) {
     const l = (filingByEvent.get(e.id) || []).sort((a, b) => (a.takenAt || 0) - (b.takenAt || 0));
-    e.exhibit = l.length ? exhibitLetter(letter++) : '';
+    const docs = (state.docs || []).filter((d) => d.eventId === e.id);
+    e.exhibit = l.length || docs.length ? exhibitLetter(letter++) : '';
     l.forEach((p, i) => { p.filing = true; p.keepsake = true; p.exhibit = `${e.exhibit}-${i + 1}`; });
+    docs.forEach((d, j) => { d.exhibit = `${e.exhibit}-${l.length + j + 1}`; });
   }
 }
 
