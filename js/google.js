@@ -42,7 +42,8 @@ export function signIn() {
       resolve();
     };
     tokenClient.error_callback = (e) => reject(new Error(e?.message || e?.type || 'Sign-in was cancelled.'));
-    tokenClient.requestAccessToken();
+    // Always show the account chooser so each partner can sign in with their own account.
+    tokenClient.requestAccessToken({ prompt: 'select_account' });
   });
 }
 

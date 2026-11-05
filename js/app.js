@@ -210,7 +210,9 @@ function setupGoogle() {
     try {
       await G.signIn();
       $('#g-pick').disabled = false;
-      $('#g-signin').textContent = 'Signed in ✓';
+      $('#g-signin').textContent = 'Switch Google account';
+      $('#g-signin').classList.remove('primary');
+      $('#g-signin').classList.add('ghost');
       status('Signed in. Now choose your photos.');
     } catch (e) { status(e.message); }
   };
