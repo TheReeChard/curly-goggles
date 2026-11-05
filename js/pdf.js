@@ -1,6 +1,7 @@
 // PDF output: a plain, printable filing packet and a designed keepsake.
 import { db } from './db.js';
-import { decode, resize, crop, toBlob, toDataURL } from './images.js';
+import { decode, resize, toBlob, toDataURL } from './images.js';
+import { peopleText } from './people.js';
 import { fmtDate, fmtRange, typeLabel, ymd } from './curate.js';
 
 const PAGE_W = 612, PAGE_H = 792, M = 48; // US Letter, points
@@ -132,7 +133,7 @@ export async function filingPdf(state, onProgress) {
     doc.setFont('helvetica', 'bold').setFontSize(10);
     doc.text(`Exhibit ${p.exhibit}`, M, top + imgH + 16);
     doc.setFont('helvetica', 'normal');
-    const cap = [photoDate(p), e.location, e.title, p.caption].filter(Boolean).join(' · ');
+    const cap = [photoDate(p), e.location, e.title, p.caption || peopleText(state, p)].filter(Boolean).join(' · ');
     doc.text(doc.splitTextToSize(cap, CW - 70), M + 70, top + imgH + 16);
   }
 
@@ -149,10 +150,35 @@ export async function filingPdf(state, onProgress) {
 }
 
 // ===================== Keepsake =====================
-const INK = [43, 38, 36], ACCENT = [156, 74, 90], SOFT = [130, 118, 112], PAPER = [251, 247, 241];
+// A designed photo book: full-bleed cover, story page, a chapter opener per
+// event, then pages that rotate through several layouts (feature, polaroids,
+// grid, duo, mosaic, full page), photos cropped around faces, a milestones
+// timeline for events without photos, and a closing page.
+const INK = [43, 38, 36], ACCENT = [156, 74, 90], SOFT = [130, 118, 112], PAPER = [251, 247, 241], WHITE = [255, 255, 255];
+const KM = 36, KG = 10, KCW = PAGE_W - 2 * KM;
 
-function paper(doc) {
-  doc.setFillColor(...PAPER).rect(0, 0, PAGE_W, PAGE_H, 'F');
+function faceCrop(img, p, aspect, maxSide) {
+  const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
+  let cw = W, ch = H;
+  if (W / H > aspect) cw = H * aspect; else ch = W / aspect;
+  let cx = W / 2, cy = H * 0.45;
+  const fl = p.faceList || [];
+  if (fl.length) {
+    let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+    for (const f of fl) { x0 = Math.min(x0, f.b[0]); y0 = Math.min(y0, f.b[1]); x1 = Math.max(x1, f.b[0] + f.b[2]); y1 = Math.max(y1, f.b[1] + f.b[3]); }
+    cx = ((x0 + x1) / 2) * W;
+    cy = ((y0 + y1) / 2) * H;
+  }
+  const sx = Math.max(0, Math.min(W - cw, cx - cw / 2));
+  const sy = Math.max(0, Math.min(H - ch, cy - ch * 0.42)); // faces slightly above center
+  const s = Math.min(1, maxSide / Math.max(cw, ch));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(cw * s));
+  c.height = Math.max(1, Math.round(ch * s));
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, sx, sy, cw, ch, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.85);
 }
 
 export async function keepsakePdf(state, onProgress) {
@@ -160,107 +186,243 @@ export async function keepsakePdf(state, onProgress) {
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
   const P = state.project;
   const chosen = state.photos.filter((p) => p.keepsake);
-  const maxSide = chosen.length > 150 ? 1100 : 1500;
+  const scale = chosen.length > 200 ? 1.6 : 2.2; // pixels per point
+  const labels = {};
+  let done = 0;
+  let imgN = 0;
+  const caption = (p) => p.caption || peopleText(state, p);
+  const best = (list) => [...list].sort((a, b) => (a.aiRank ?? 99) - (b.aiRank ?? 99) || (b.couple || 0) - (a.couple || 0) || b.score - a.score)[0];
 
-  // Cover with the best photo
-  paper(doc);
-  const hero = [...chosen].sort((a, b) => b.score - a.score)[0];
-  if (hero) {
-    const blob = await db.get('blobs', `full:${hero.id}`);
-    if (blob) {
-      const c = crop(await decode(blob), PAGE_W / 470, 1800);
-      doc.addImage(await toDataURL(await toBlob(c, 0.88)), 'JPEG', 0, 0, PAGE_W, 470, 'hero', 'FAST');
+  const alpha = (a) => doc.setGState(new doc.GState({ opacity: a }));
+  const paper = () => doc.setFillColor(...PAPER).rect(0, 0, PAGE_W, PAGE_H, 'F');
+  const page = (label) => { doc.addPage(); paper(); labels[doc.getNumberOfPages()] = label; };
+
+  async function prep(p, w, h) {
+    const blob = await db.get('blobs', `full:${p.id}`);
+    if (!blob) return null;
+    const img = await decode(blob);
+    const data = faceCrop(img, p, w / h, Math.min(1700, Math.max(w, h) * scale));
+    img.close?.();
+    onProgress?.(`Designing your keepsake… photo ${++done} of ${chosen.length}`);
+    return data;
+  }
+  const put = (data, x, y, w, h) => { if (data) doc.addImage(data, 'JPEG', x, y, w, h, `k${imgN++}`, 'FAST'); };
+  async function image(p, x, y, w, h) { put(await prep(p, w, h), x, y, w, h); }
+  // White mat with a soft shadow.
+  async function framed(p, x, y, w, h, pad = 6) {
+    alpha(0.16);
+    doc.setFillColor(40, 30, 25).rect(x - pad + 2.5, y - pad + 3.5, w + 2 * pad, h + 2 * pad, 'F');
+    alpha(1);
+    doc.setFillColor(...WHITE).rect(x - pad, y - pad, w + 2 * pad, h + 2 * pad, 'F');
+    await image(p, x, y, w, h);
+  }
+  function capText(text, x, y, w, align = 'left', size = 10) {
+    if (!text) return;
+    doc.setFont('times', 'italic').setFontSize(size).setTextColor(...SOFT);
+    const lines = doc.splitTextToSize(text, w).slice(0, 2);
+    doc.text(lines, align === 'center' ? x + w / 2 : x, y, { align });
+  }
+  // Draw synchronously inside a rotation about (cx, cy).
+  function rotated(cx, cy, deg, draw) {
+    const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+    doc.advancedAPI((d) => {
+      d.saveGraphicsState();
+      d.setCurrentTransformationMatrix(new d.Matrix(c, s, -s, c, cx - cx * c + cy * s, cy - cx * s - cy * c));
+      draw();
+      d.restoreGraphicsState();
+    });
+  }
+  async function polaroid(p, cx, cy, w, h, deg) {
+    const data = await prep(p, w, h);
+    rotated(cx, cy, deg, () => {
+      const x = cx - w / 2, y = cy - h / 2, pad = 11, bottom = 44;
+      alpha(0.18);
+      doc.setFillColor(40, 30, 25).rect(x - pad + 3, y - pad + 4, w + 2 * pad, h + pad + bottom, 'F');
+      alpha(1);
+      doc.setFillColor(...WHITE).rect(x - pad, y - pad, w + 2 * pad, h + pad + bottom, 'F');
+      put(data, x, y, w, h);
+      capText(caption(p), x, y + h + 22, w, 'center', 11);
+    });
+  }
+
+  // ---- Layouts: each draws one page from the front of `list` ----
+  const top = KM + 6, bottom = PAGE_H - 54, CH = bottom - top;
+  const L = {
+    full: { n: 1, async draw([a], label) {
+      page(label);
+      await image(a, 0, 0, PAGE_W, PAGE_H - 92);
+      capText(caption(a), KM, PAGE_H - 62, KCW, 'center', 12);
+    } },
+    duo: { n: 2, async draw([a, b], label) {
+      page(label);
+      const w = (KCW - KG * 2) / 2, h = CH - 70;
+      await framed(a, KM + 4, top + 20, w, h);
+      await framed(b, KM + w + KG * 2 - 4, top + 50, w, h - 30);
+      capText(caption(a), KM + 4, top + 20 + h + 26, w);
+      capText(caption(b), KM + w + KG * 2 - 4, top + 20 + h + 26, w);
+    } },
+    feature: { n: 3, async draw([a, b, c], label) {
+      page(label);
+      const wl = KCW * 0.62, wr = KCW - wl - KG, h = CH - 30, hr = (h - KG) / 2;
+      await image(a, KM, top, wl, h);
+      await image(b, KM + wl + KG, top, wr, hr);
+      await image(c, KM + wl + KG, top + hr + KG, wr, hr);
+      capText(caption(a), KM, top + h + 18, wl);
+    } },
+    polaroids: { n: 3, async draw(ps, label) {
+      page(label);
+      const spots = [[KM + 150, top + 150, -6], [PAGE_W - KM - 160, top + 345, 5], [KM + 190, top + 545, -2.5]];
+      for (let i = 0; i < ps.length; i++) await polaroid(ps[i], spots[i][0], spots[i][1], 218, 218, spots[i][2]);
+    } },
+    grid: { n: 4, async draw(ps, label) {
+      page(label);
+      const w = (KCW - KG) / 2, h = (CH - KG - 24) / 2;
+      for (let i = 0; i < ps.length; i++) await image(ps[i], KM + (i % 2) * (w + KG), top + Math.floor(i / 2) * (h + KG), w, h);
+    } },
+    mosaic: { n: 4, async draw([a, ...rest], label) {
+      page(label);
+      const h1 = CH * 0.56, h2 = CH - h1 - KG - 24, w3 = (KCW - 2 * KG) / 3;
+      await image(a, KM, top, KCW, h1);
+      for (let i = 0; i < rest.length; i++) await image(rest[i], KM + i * (w3 + KG), top + h1 + KG, w3, h2);
+    } },
+  };
+  const cycle = ['feature', 'polaroids', 'grid', 'duo', 'mosaic'];
+  let ci = 0;
+  async function layoutPages(list, label) {
+    let rest = [...list];
+    while (rest.length) {
+      let name;
+      if (rest.length === 1) name = 'full';
+      else if (rest.length === 2) name = 'duo';
+      else if (rest.length === 3) name = ['feature', 'polaroids'][ci++ % 2];
+      else if (rest.length === 4) name = ['grid', 'mosaic'][ci++ % 2];
+      else name = cycle[ci++ % cycle.length];
+      const t = L[name];
+      await t.draw(rest.slice(0, t.n), label);
+      rest = rest.slice(t.n);
     }
   }
-  doc.setTextColor(...ACCENT).setFont('times', 'italic').setFontSize(16);
-  doc.text(P.title?.trim() || 'Our Story', PAGE_W / 2, 545, { align: 'center' });
-  doc.setTextColor(...INK).setFont('times', 'normal').setFontSize(34);
-  doc.text(doc.splitTextToSize(names(P) || 'Us', CW), PAGE_W / 2, 590, { align: 'center' });
+
+  // ---- Cover ----
+  paper();
+  const hero = best(chosen.filter((p) => (p.couple || 0) >= 2).length ? chosen.filter((p) => p.couple >= 2) : chosen);
+  if (hero) {
+    await image(hero, 0, 0, PAGE_W, PAGE_H);
+    for (let i = 0; i < 40; i++) { // soft dark fade behind the names (each band adds a little)
+      alpha(0.045);
+      doc.setFillColor(20, 14, 12).rect(0, PAGE_H - 400 + i * 10, PAGE_W, 400 - i * 10, 'F');
+    }
+    alpha(1);
+  }
+  const coverInk = hero ? WHITE : INK;
+  doc.setTextColor(...(hero ? [235, 205, 210] : ACCENT)).setFont('times', 'italic').setFontSize(17);
+  doc.text(P.title?.trim() || 'Our Story', PAGE_W / 2, PAGE_H - 180, { align: 'center' });
+  doc.setTextColor(...coverInk).setFont('times', 'normal').setFontSize(38);
+  doc.text(doc.splitTextToSize(names(P) || 'Us', KCW), PAGE_W / 2, PAGE_H - 130, { align: 'center' });
   const dated = state.events.filter((e) => e.start);
   if (dated.length) {
-    doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(...SOFT);
     const y0 = dated[0].start.slice(0, 4), y1 = (dated.at(-1).end || dated.at(-1).start).slice(0, 4);
-    doc.text((y0 === y1 ? y0 : `${y0} — ${y1}`).split('').join(' '), PAGE_W / 2, 640, { align: 'center' });
+    doc.setFont('helvetica', 'normal').setFontSize(10).setTextColor(...(hero ? [220, 210, 205] : SOFT));
+    doc.text((y0 === y1 ? y0 : `${y0}  —  ${y1}`).split('').join(' '), PAGE_W / 2, PAGE_H - 92, { align: 'center' });
   }
-  doc.setDrawColor(...ACCENT).setLineWidth(0.8).line(PAGE_W / 2 - 30, 665, PAGE_W / 2 + 30, 665);
 
-  // Introduction page
+  // ---- Story ----
   if (P.story?.trim()) {
-    doc.addPage();
-    paper(doc);
-    doc.setFont('times', 'italic').setFontSize(15).setTextColor(...INK);
-    const lines = doc.splitTextToSize(P.story.trim(), CW - 120);
-    const h = lines.length * 15 * 1.6;
+    page('');
+    doc.setFont('times', 'normal').setFontSize(90).setTextColor(...ACCENT);
+    alpha(0.25); doc.text('“', PAGE_W / 2, PAGE_H / 2 - 120, { align: 'center' }); alpha(1);
+    doc.setFont('times', 'italic').setFontSize(16).setTextColor(...INK);
+    const lines = doc.splitTextToSize(P.story.trim(), KCW - 110);
+    const h = lines.length * 16 * 1.6;
     doc.text(lines, PAGE_W / 2, (PAGE_H - h) / 2, { align: 'center', lineHeightFactor: 1.6 });
-    doc.setDrawColor(...ACCENT).setLineWidth(0.8).line(PAGE_W / 2 - 30, (PAGE_H + h) / 2 + 20, PAGE_W / 2 + 30, (PAGE_H + h) / 2 + 20);
+    doc.setDrawColor(...ACCENT).setLineWidth(0.8).line(PAGE_W / 2 - 28, (PAGE_H + h) / 2 + 24, PAGE_W / 2 + 28, (PAGE_H + h) / 2 + 24);
   }
 
-  // Events
-  let y = PAGE_H;
-  const bottom = PAGE_H - 56;
-  const newPage = () => { doc.addPage(); paper(doc); y = M + 8; };
-  let done = 0;
+  // ---- Milestones (events without photos) ----
+  let pendingMilestones = [];
+  function flushMilestones() {
+    if (!pendingMilestones.length) return;
+    page('Milestones');
+    doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(...ACCENT);
+    doc.text('M I L E S T O N E S', KM, top + 14);
+    let y = top + 60;
+    const lineX = KM + 118;
+    const startY = y - 14;
+    for (const e of pendingMilestones) {
+      const d = e.description ? doc.splitTextToSize(e.description, KCW - 140) : [];
+      const h = 26 + d.length * 15 + 26;
+      if (y + h > bottom) {
+        doc.setDrawColor(...ACCENT).setLineWidth(0.6).line(lineX, startY, lineX, y - 20);
+        page('Milestones'); y = top + 30;
+      }
+      doc.setFont('helvetica', 'bold').setFontSize(8.5).setTextColor(...SOFT);
+      doc.text(fmtRange(e.start, e.end).toUpperCase(), lineX - 16, y, { align: 'right' });
+      doc.setFillColor(...ACCENT).circle(lineX, y - 3, 4, 'F');
+      doc.setFont('times', 'normal').setFontSize(17).setTextColor(...INK).text(e.title || typeLabel(e.type), lineX + 18, y + 1);
+      if (d.length) doc.setFont('times', 'normal').setFontSize(11.5).setTextColor(...INK).text(d, lineX + 18, y + 20, { lineHeightFactor: 1.35 });
+      y += h;
+    }
+    doc.setDrawColor(...ACCENT).setLineWidth(0.6).line(lineX, startY, lineX, y - 40);
+    pendingMilestones = [];
+  }
+
+  // ---- Chapters ----
+  let chapter = 0;
   for (const e of state.events) {
     const list = state.photos.filter((p) => p.eventId === e.id && p.keepsake).sort((a, b) => (a.takenAt || 0) - (b.takenAt || 0));
-    if (!list.length && !e.description && !e.title) continue;
-    if (y > bottom - 260) newPage(); else y += 26;
-
-    doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(...ACCENT);
-    doc.text(fmtRange(e.start, e.end).toUpperCase(), M, y);
-    y += 26;
-    doc.setFont('times', 'normal').setFontSize(26).setTextColor(...INK);
-    const t = doc.splitTextToSize(e.title || typeLabel(e.type), CW);
-    doc.text(t, M, y);
-    y += (t.length - 1) * 28 + 8;
-    if (e.location) {
-      doc.setFont('times', 'italic').setFontSize(13).setTextColor(...SOFT);
-      doc.text(e.location, M, y + 10);
-      y += 18;
-    }
+    if (!list.length) { if (e.title || e.description) pendingMilestones.push(e); continue; }
+    flushMilestones();
+    chapter++;
+    const label = e.title || typeLabel(e.type);
+    const lead = best(list);
+    page(label);
+    // Opener: full-bleed lead photo, then the chapter text.
+    const heroH = 400;
+    await image(lead, 0, 0, PAGE_W, heroH);
+    let y = heroH + 44;
+    doc.setFont('helvetica', 'bold').setFontSize(8.5).setTextColor(...ACCENT);
+    doc.text(`C H A P T E R   ${String(chapter).padStart(2, '0')}     ·     ${fmtRange(e.start, e.end).toUpperCase()}`, KM, y);
+    y += 36;
+    doc.setFont('times', 'normal').setFontSize(32).setTextColor(...INK);
+    const t = doc.splitTextToSize(label, KCW);
+    doc.text(t, KM, y);
+    y += (t.length - 1) * 34 + 8;
+    if (e.location) { doc.setFont('times', 'italic').setFontSize(14).setTextColor(...SOFT).text(e.location, KM, y + 14); y += 24; }
+    doc.setDrawColor(...ACCENT).setLineWidth(0.8).line(KM, y + 14, KM + 44, y + 14);
+    y += 36;
     if (e.description) {
-      doc.setFont('times', 'normal').setFontSize(12).setTextColor(...INK);
-      const d = doc.splitTextToSize(e.description, CW);
-      doc.text(d, M, y + 14, { lineHeightFactor: 1.35 });
-      y += d.length * 16 + 6;
+      doc.setFont('times', 'normal').setFontSize(13).setTextColor(...INK);
+      const d = doc.splitTextToSize(e.description, KCW - 60).slice(0, Math.floor((bottom - y) / 19));
+      doc.text(d, KM, y, { lineHeightFactor: 1.45 });
+      y += d.length * 13 * 1.45;
     }
-    y += 14;
-
-    // Justified photo rows
-    const GAP = 6, TARGET = list.length === 1 ? 360 : list.length <= 3 ? 230 : 165;
-    let rowItems = [];
-    const flush = async (last) => {
-      if (!rowItems.length) return;
-      const aspects = rowItems.map((p) => p.w / p.h);
-      const sumA = aspects.reduce((a, b) => a + b, 0);
-      let h = (CW - GAP * (rowItems.length - 1)) / sumA;
-      if (last && h > TARGET) h = TARGET;
-      h = Math.min(h, bottom - M - 8);
-      if (y + h > bottom) newPage();
-      const rowW = sumA * h + GAP * (rowItems.length - 1);
-      let x = M + (CW - rowW) / 2;
-      for (let i = 0; i < rowItems.length; i++) {
-        const p = rowItems[i];
-        const data = await imgData(p, maxSide);
-        if (data) doc.addImage(data, 'JPEG', x, y, aspects[i] * h, h, `k${p.id}`, 'FAST');
-        x += aspects[i] * h + GAP;
-        onProgress?.(`Laying out photo ${++done} of ${chosen.length}…`);
-      }
-      y += h + GAP;
-      rowItems = [];
-    };
-    for (const p of list) {
-      rowItems.push(p);
-      const sumA = rowItems.reduce((a, q) => a + q.w / q.h, 0);
-      if (sumA * TARGET + GAP * (rowItems.length - 1) >= CW) await flush(false);
+    // Fill the rest of the opener with a row of framed photos.
+    let rest = list.filter((p) => p !== lead);
+    const space = bottom - y - 34;
+    if (space > 115 && rest.length >= 2) {
+      const k = Math.min(3, rest.length);
+      const w = (KCW - 16 - (k - 1) * 22) / k, h = Math.min(space, w * 0.82);
+      for (let i = 0; i < k; i++) await framed(rest[i], KM + 8 + i * (w + 22), bottom - h - 8, w, h, 5);
+      rest = rest.slice(k);
     }
-    await flush(true);
+    await layoutPages(rest, label);
   }
+  flushMilestones();
 
+  // ---- Closing page ----
+  page('');
+  const last = best(chosen.filter((p) => p !== hero)) || hero;
+  if (last) await polaroid(last, PAGE_W / 2, PAGE_H / 2 - 60, 300, 300, -3);
+  doc.setFont('times', 'italic').setFontSize(22).setTextColor(...ACCENT);
+  doc.text('To be continued…', PAGE_W / 2, PAGE_H - 140, { align: 'center' });
+
+  // ---- Running footer ----
   const n = doc.getNumberOfPages();
   for (let i = 2; i <= n; i++) {
     doc.setPage(i);
-    doc.setFont('times', 'italic').setFontSize(9).setTextColor(...SOFT);
-    doc.text(String(i - 1), PAGE_W / 2, PAGE_H - 26, { align: 'center' });
+    doc.setFont('helvetica', 'normal').setFontSize(7.5).setTextColor(...SOFT);
+    if (labels[i]) doc.text(labels[i].toUpperCase().split('').join(' ').slice(0, 90), KM, PAGE_H - 26);
+    doc.text(String(i - 1), PAGE_W - KM, PAGE_H - 26, { align: 'right' });
   }
   return doc;
 }

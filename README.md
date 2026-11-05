@@ -17,6 +17,20 @@ Nothing is uploaded. Photos are processed in your browser and saved only on that
 4. **Check for gaps:** the tool flags missing evidence of living together or shared finances, long gaps, and dates that don't add up.
 5. **Download** the filing PDF and the keepsake PDF.
 
+### Who's who (face recognition, on your device)
+
+After you add photos, the app finds the faces in them and groups the same person across photos. Under **Who's who**, pick who each person is (petitioner, spouse, family, friend). After that:
+
+- Captions use your names ("Richard and Ada with Mom"), in both PDFs and in AI-written text.
+- Photos of the two of you together are preferred when choosing.
+- Keepsake photos are cropped around faces.
+
+Face recognition runs only in your browser; no faces or photos are uploaded. The first run downloads about 12 MB of models.
+
+### Keepsake design
+
+Full-photo cover, story page, a chapter opener for each event, then pages that rotate through several layouts (feature, mosaic, grid, side-by-side, full page and tilted polaroids with captions), a milestones timeline for events without photos, and a closing page. The filing PDF stays plain and easy to read, as USCIS expects.
+
 ### ✨ AI mode (optional)
 
 Choose an AI provider and paste your API key from that company, and the tool does the curating and writing for you:

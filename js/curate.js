@@ -114,7 +114,8 @@ function similar(a, b, strict) {
 
 // Ranking: photos the AI ranked come first (in its order); after an AI review,
 // photos it didn't choose are only used if the couple pins them.
-const rankScore = (p) => (p.aiRank != null ? 2 - p.aiRank * 0.01 : p.score);
+// Photos with both partners recognized get a boost, one partner a small one.
+const rankScore = (p) => (p.aiRank != null ? 2 - p.aiRank * 0.01 : p.score + (p.couple === 2 ? 0.25 : p.couple === 1 ? 0.08 : 0));
 
 function pickFrom(list, k, strict, aiReviewed) {
   const pinned = list.filter((p) => p.pick === 'pinned');

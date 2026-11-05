@@ -109,6 +109,13 @@ input.ai, textarea.ai { border-color: color-mix(in srgb, var(--accent) 55%, var(
 .ph i { position: absolute; right: 4px; top: 4px; font-style: normal; font-size: 13px; background: var(--card); color: var(--ink); border-radius: 99px; padding: 0 5px; }
 .ph:focus-visible { outline: 3px solid var(--accent); }
 
+.people { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
+.person { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 12px; padding: 8px; }
+.person.done { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.person img { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: var(--line); flex: none; }
+.pmeta { display: grid; gap: 5px; min-width: 0; flex: 1; }
+.pmeta select, .pmeta input { padding: 5px 8px; font-size: 13px; }
+
 #warnings { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 #warnings li { padding: 10px 12px 10px 36px; border-radius: 10px; border: 1px solid var(--line); position: relative; }
 #warnings li::before { position: absolute; left: 12px; top: 10px; }

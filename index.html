@@ -78,6 +78,18 @@
       <p id="photo-summary" class="muted"></p>
     </section>
 
+    <section class="card" id="s-people">
+      <h2><span class="num">★</span> Who's who</h2>
+      <p class="muted">The app finds the faces that appear in your photos (on this device, nothing is uploaded) and groups the same person together. Tell it who each person is, and it will use your names in captions, prefer photos of the two of you together, and frame photos around faces in the keepsake.</p>
+      <div class="row">
+        <button id="people-scan">Find people</button>
+        <label class="check"><input type="checkbox" id="find-people"> Find people automatically after adding photos</label>
+      </div>
+      <p class="muted small" id="people-status" role="status"></p>
+      <div id="people" class="people"></div>
+      <p class="muted small">If the same person shows up twice, give both the same name and they'll be treated as one.</p>
+    </section>
+
     <section class="card" id="s-timeline">
       <h2><span class="num">3</span> Your timeline</h2>
       <p class="muted">Photos are grouped by date. Give each group a name and a place, and add events that have no photos, like how you met, your lease or a joint bank account.

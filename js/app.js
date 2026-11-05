@@ -6,6 +6,7 @@ import { EVENT_TYPES, regroup, select, checks, fmtRange, fmtDate, ymd, uid, sort
 import { filingPdf, keepsakePdf } from './pdf.js';
 import { runAI, key as aiKey, PROVIDERS } from './ai.js';
 import { fillLocations } from './places.js';
+import { scanFaces, applyNames, peopleToName, faceThumb, personName, peopleText, ROLES } from './people.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -13,9 +14,10 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 const state = {
   project: { petitioner: '', beneficiary: '', receipt: '', title: '', story: '' },
-  settings: { filingPerEvent: 3, filingMax: 60, keepsakePerEvent: 12, autoAI: true, aiProvider: 'anthropic', aiModels: {}, placeNames: true },
+  settings: { filingPerEvent: 3, filingMax: 60, keepsakePerEvent: 12, autoAI: true, aiProvider: 'anthropic', aiModels: {}, placeNames: true, findPeople: true },
   photos: [],
   events: [],
+  people: [],
 };
 
 // ---------- persistence ----------
@@ -24,8 +26,8 @@ function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try {
-      const { photos, events, project, settings } = state;
-      await db.put('meta', 'state', JSON.parse(JSON.stringify({ photos, events, project, settings })));
+      const { photos, events, project, settings, people } = state;
+      await db.put('meta', 'state', JSON.parse(JSON.stringify({ photos, events, project, settings, people })));
     } catch (e) { console.warn('save failed', e); }
   }, 400);
 }
@@ -105,8 +107,72 @@ async function importItems(items, getBlob) {
   refresh();
   progress(0, 0);
   toast(`Added ${done - failed} photo${done - failed === 1 ? '' : 's'}${failed ? ` (${failed} couldn't be read)` : ''}.`);
+  await autoFaces();
   await autoPlaces();
   if (currentKey() && state.settings.autoAI) await doAI();
+}
+
+// ---------- people ----------
+let nameTimer;
+let scanning = false;
+async function autoFaces(force) {
+  if ((!state.settings.findPeople && !force) || scanning) return;
+  if (!state.photos.some((p) => !p.faceScan)) { renderPeople(); return; }
+  scanning = true;
+  $('#people-scan').disabled = true;
+  try {
+    await scanFaces(state, (d, t, text) => { progress(d, t, text); $('#people-status').textContent = text; });
+    $('#people-status').textContent = '';
+    refresh();
+  } catch (e) {
+    $('#people-status').textContent = e.message;
+  } finally {
+    scanning = false;
+    $('#people-scan').disabled = false;
+    progress(0, 0);
+  }
+}
+
+function renderPeople() {
+  const box = $('#people');
+  const list = peopleToName(state);
+  if (!list.length) {
+    box.innerHTML = `<p class="muted small">${state.photos.some((p) => p.faceScan) ? 'No one appears in more than one photo yet.' : 'Add photos, then click "Find people".'}</p>`;
+    return;
+  }
+  const opts = ROLES.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('');
+  box.innerHTML = list.map((pp) => `<div class="person${pp.role ? ' done' : ''}" data-pid="${pp.id}">
+      <img alt="" data-face="${pp.id}">
+      <div class="pmeta">
+        <select data-pk="role">${opts.replace(`value="${pp.role}"`, `value="${pp.role}" selected`)}</select>
+        <input data-pk="name" placeholder="Name" value="${esc(personName(state, pp))}" ${pp.role === 'ignore' ? 'disabled' : ''}>
+        <span class="muted small">in ${pp.count} photo${pp.count === 1 ? '' : 's'}</span>
+      </div>
+    </div>`).join('');
+  for (const pp of list) faceThumb(pp).then((u) => { const img = box.querySelector(`[data-face="${pp.id}"]`); if (img) img.src = u; }).catch(() => {});
+  const unnamed = list.filter((pp) => !pp.role).length;
+  $('#people-status').textContent = unnamed ? `${unnamed} ${unnamed === 1 ? 'person needs' : 'people need'} a name. Pick who each person is: the two of you first.` : '';
+}
+
+function onPersonChange(ev) {
+  const el = ev.target.closest('[data-pk]');
+  const card = ev.target.closest('[data-pid]');
+  if (!el || !card) return;
+  const pp = state.people.find((x) => x.id === card.dataset.pid);
+  const P = state.project;
+  if (el.dataset.pk === 'role') {
+    pp.role = el.value;
+    const field = pp.role === 'petitioner' || pp.role === 'beneficiary' ? pp.role : null;
+    if (field && !P[field]?.trim() && pp.name) P[field] = pp.name;
+  } else {
+    pp.name = el.value.trim();
+    if (pp.role === 'petitioner' || pp.role === 'beneficiary') P[pp.role] = pp.name;
+    if (!pp.role && pp.name) pp.role = 'family';
+  }
+  // the same name given to two groups = the same person
+  applyNames(state);
+  fillForms();
+  refresh();
 }
 
 // ---------- place names ----------
@@ -283,6 +349,7 @@ function refresh() {
   renderEvents();
   renderChecks();
   renderSummary();
+  renderPeople();
   $('[data-field=story]').value = state.project.story || '';
   $('[data-field=story]').classList.toggle('ai', !!state.project.storyAI);
   save();
@@ -409,7 +476,8 @@ async function openPhoto(id) {
   current = p;
   const dlg = $('#photo-dialog');
   $('#dlg-img').src = await thumbUrl(id, 'full');
-  const faces = p.faces == null ? 'faces: not checked' : `${p.faces} face${p.faces === 1 ? '' : 's'}`;
+  const who = peopleText(state, p);
+  const faces = who || (p.faces == null ? 'faces: not checked' : `${p.faces} face${p.faces === 1 ? '' : 's'}`);
   $('#dlg-meta').textContent = `${p.takenAt ? fmtDate(ymd(p.takenAt)) : 'Date unknown'}${p.dateGuessed ? ' (guessed)' : ''} · ${faces} · sharpness ${Math.round(p.sharp * 100)}% · score ${Math.round(p.score * 100)}`
     + (p.filing ? ` · Exhibit ${p.exhibit}` : p.keepsake ? ' · keepsake' : ' · not chosen')
     + (p.aiRank != null ? ` · AI pick #${p.aiRank + 1}` : '');
@@ -470,8 +538,8 @@ async function saveProject() {
   const status = (t) => { $('#export-status').textContent = t; };
   status('Packing your project…');
   const zip = new window.JSZip();
-  const { photos, events, project, settings } = state;
-  zip.file('project.json', JSON.stringify({ version: 1, photos, events, project, settings }));
+  const { photos, events, project, settings, people } = state;
+  zip.file('project.json', JSON.stringify({ version: 1, photos, events, project, settings, people }));
   let i = 0;
   for (const p of photos) {
     const full = await db.get('blobs', `full:${p.id}`);
@@ -504,7 +572,7 @@ async function openProject(file) {
       if (thumb) await db.put('blobs', `thumb:${p.id}`, new Blob([await thumb.async('arraybuffer')], { type: 'image/jpeg' }));
       if (++i % 50 === 0) status(`Loading photos… ${i} of ${data.photos.length}`);
     }
-    Object.assign(state, { photos: data.photos, events: data.events, project: data.project, settings: { ...state.settings, ...data.settings } });
+    Object.assign(state, { photos: data.photos, events: data.events, people: data.people || [], project: data.project, settings: { ...state.settings, ...data.settings } });
     fillForms();
     refresh();
     status('Project loaded.');
@@ -518,7 +586,7 @@ async function clearAll() {
   await db.clear('blobs');
   await db.clear('meta');
   urlCache.clear();
-  Object.assign(state, { photos: [], events: [], project: { petitioner: '', beneficiary: '', receipt: '', title: '', story: '' } });
+  Object.assign(state, { photos: [], events: [], people: [], project: { petitioner: '', beneficiary: '', receipt: '', title: '', story: '' } });
   fillForms();
   refresh();
 }
@@ -545,6 +613,7 @@ async function boot() {
   $$('[data-field]').forEach((el) => {
     el.oninput = () => {
       state.project[el.dataset.field] = el.value;
+      if (el.dataset.field === 'petitioner' || el.dataset.field === 'beneficiary') { applyNames(state); clearTimeout(nameTimer); nameTimer = setTimeout(refresh, 600); }
       if (el.dataset.field === 'story') { state.project.storyAI = false; el.classList.remove('ai'); renderChecks(); }
       save();
     };
@@ -583,6 +652,10 @@ async function boot() {
   setupDialog();
   setupGoogle();
   setupAI();
+  $('#people-scan').onclick = () => autoFaces(true);
+  $('#find-people').checked = state.settings.findPeople;
+  $('#find-people').onchange = (e) => { state.settings.findPeople = e.target.checked; save(); if (e.target.checked) autoFaces(); };
+  $('#people').addEventListener('change', onPersonChange);
   if (!db.persistent) toast('This browser is blocking storage, so your work won\'t be saved between visits. Use "Save project file".', 9000);
   refresh();
 }

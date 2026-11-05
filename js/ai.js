@@ -177,6 +177,8 @@ Choose and order the best photos for the timeline. A good photo:
 - adds variety — skip near-duplicates of a photo you already chose, and skip screenshots, documents, memes and photos with neither partner in them unless nothing better exists.
 Rank only photos worth printing, best first.
 
+When a photo lists the people recognized in it, you may use those names in its caption ("Richard and Ada with Mom at dinner"). Never name anyone who isn't listed.
+
 Write in the first person plural ("we"), warm but plain and factual. Never invent facts: no names, places, relationships, occasions or dates that are not in the details given or clearly visible in the photos. If you cannot tell where or why something happened, describe what is visible instead ("Dinner together at a restaurant"). The couple will review everything before filing.
 
 Reply only with JSON matching the requested schema.`;
@@ -238,13 +240,20 @@ async function imageData(p) {
   return (await toDataURL(small)).split(',')[1];
 }
 
+function coupleLine(P) {
+  const a = P.petitioner?.trim(), b = P.beneficiary?.trim();
+  if (a && b) return `The couple: ${a} (petitioner) and ${b} (spouse).`;
+  if (a || b) return `One partner is ${a || b}; the other's name was not given, so don't name them.`;
+  return "The couple's names were not given; don't use names for them.";
+}
+
 async function reviewEvent(provider, apiKey, model, state, e) {
   const all = state.photos.filter((p) => p.eventId === e.id);
   const list = shortlist(all);
   const k = Math.min(list.length, Math.max(state.settings.keepsakePerEvent, state.settings.filingPerEvent));
   const P = state.project;
   const known = [
-    `Couple: ${P.petitioner || 'Partner 1'} and ${P.beneficiary || 'Partner 2'}.`,
+    coupleLine(P),
     `Event dates: ${fmtRange(e.start, e.end)}.`,
     !e.auto && e.title && !e.ai?.title ? `Title the couple chose: ${e.title}` : '',
     e.location ? `Location: ${e.location}` : '',
@@ -255,7 +264,7 @@ async function reviewEvent(provider, apiKey, model, state, e) {
   const content = [{ text: known }];
   for (let i = 0; i < list.length; i++) {
     const p = list[i];
-    content.push({ text: `Photo ${i + 1}${p.takenAt ? ` — ${ymd(p.takenAt)}` : ''}${p.pick === 'pinned' ? ' (the couple pinned this one)' : ''}` });
+    content.push({ text: `Photo ${i + 1}${p.takenAt ? ` — ${ymd(p.takenAt)}` : ''}${p.people?.length ? ` — people recognized: ${p.people.join(', ')}` : ''}${p.pick === 'pinned' ? ' (the couple pinned this one)' : ''}` });
     content.push({ image: await imageData(p) });
   }
   const res = await askJSON(provider, apiKey, model, content, schema(k));
@@ -304,7 +313,7 @@ export async function runAI(state, { provider: pid, apiKey, model, only, onProgr
     try {
       const P = state.project;
       const lines = state.events.filter((e) => e.title).map((e) => `- ${fmtRange(e.start, e.end)}: ${e.title}${e.location ? ` (${e.location})` : ''}${e.description ? ` — ${e.description}` : ''}`).join('\n');
-      const res = await askJSON(provider, apiKey, model, [{ text: `Write a short, warm introduction for the first page of our keepsake photo book. Couple: ${P.petitioner || 'Partner 1'} and ${P.beneficiary || 'Partner 2'}. Use only these events:\n${lines}` }], STORY_SCHEMA);
+      const res = await askJSON(provider, apiKey, model, [{ text: `Write a short, warm introduction for the first page of our keepsake photo book. ${coupleLine(P)} Use only these events:\n${lines}` }], STORY_SCHEMA);
       if (res.story) { P.story = res.story; P.storyAI = true; }
     } catch (err) { errors.push(err.message || String(err)); }
   }
