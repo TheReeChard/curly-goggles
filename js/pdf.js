@@ -141,28 +141,39 @@ export async function filingPdf(state, onProgress) {
     }
   }
 
-  // Photo pages: two per page, with labels
-  const slotH = (PAGE_H - 2 * M - 20) / 2;
-  const imgH = slotH - 46;
+  // Photo pages: a continuous 2x2 grid across events (a wide photo takes a
+  // full row), each labeled with its exhibit number, date, place and caption.
+  const ROW_H = (PAGE_H - 2 * M - 30) / 2, CAP_H = 44, IMG_H = ROW_H - CAP_H - 8, COL_W = (CW - 20) / 2;
+  let gRow = 0, gCol = 0, needPage = true;
+  const advanceRow = () => { gCol = 0; if (++gRow >= 2) { gRow = 0; needPage = true; } };
+  const takeSlot = (wide) => {
+    if (wide && gCol === 1) advanceRow();
+    if (needPage) { doc.addPage(); needPage = false; }
+    const slot = { row: gRow, col: wide ? 0 : gCol };
+    if (wide || gCol === 1) advanceRow(); else gCol = 1;
+    return slot;
+  };
   const total = photos.length;
   let count = 0;
   for (const e of events) {
   const ordered = state.photos.filter((p) => p.eventId === e.id && p.filing).sort((a, b) => a.exhibit.localeCompare(b.exhibit, undefined, { numeric: true }));
-  for (let i = 0; i < ordered.length; i++) {
-    const p = ordered[i];
+  for (const p of ordered) {
     onProgress?.(`Adding photo ${++count} of ${total}…`);
-    if (i % 2 === 0) doc.addPage();
-    const top = M + (i % 2) * (slotH + 20);
+    const wide = p.w / p.h > 1.25;
+    const slot = takeSlot(wide);
+    const top = M + slot.row * (ROW_H + 15);
+    const x = M + slot.col * (COL_W + 20);
+    const w0 = wide ? CW : COL_W;
     const data = await imgData(p, 1600);
     if (data) {
-      const [w, h] = fit(p.w, p.h, CW, imgH);
-      doc.addImage(data, 'JPEG', M + (CW - w) / 2, top + (imgH - h) / 2, w, h, `f${p.id}`, 'FAST');
+      const [w, h] = fit(p.w, p.h, w0, IMG_H);
+      doc.addImage(data, 'JPEG', x + (w0 - w) / 2, top + (IMG_H - h), w, h, `f${p.id}`, 'FAST');
     }
-    doc.setFont('helvetica', 'bold').setFontSize(10);
-    doc.text(`Exhibit ${p.exhibit}`, M, top + imgH + 16);
-    doc.setFont('helvetica', 'normal');
+    doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(0);
+    doc.text(`Exhibit ${p.exhibit}`, x, top + IMG_H + 14);
+    doc.setFont('helvetica', 'normal').setFontSize(8.5);
     const cap = [photoDate(p), e.location, e.title, p.caption || peopleText(state, p)].filter(Boolean).join(' · ');
-    doc.text(doc.splitTextToSize(cap, CW - 70), M + 70, top + imgH + 16);
+    doc.text(doc.splitTextToSize(cap, w0).slice(0, 3), x, top + IMG_H + 26);
   }
   // Attachments: long screenshots split into two columns per page.
   for (const d of docsOf(state, e)) {
@@ -186,6 +197,7 @@ export async function filingPdf(state, onProgress) {
       doc.setFontSize(8).setTextColor(110).text(`${i + 1}/${part.ranges.length}`, x + DOC_W / 2, DOC_TOP + h + 12, { align: 'center' });
       doc.setTextColor(0);
     }
+    gRow = 0; gCol = 0; needPage = true; // photos after a screenshot start a new page
   }
   }
 
