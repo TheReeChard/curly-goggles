@@ -205,7 +205,7 @@ export function checks(state) {
   const aiText = state.events.reduce((n, e) => n + Object.values(e.ai || {}).filter(Boolean).length, 0)
     + state.photos.filter((p) => p.captionAI && (p.filing || p.keepsake)).length
     + (state.project.storyAI && state.project.story ? 1 : 0);
-  if (aiText) out.push({ level: 'warn', text: `${aiText} title(s), description(s) or caption(s) were written by AI. Read each one and correct anything that isn't exactly right — you are responsible for what you file. (AI-written text is marked ✨.)` });
+  if (aiText) out.push({ level: 'warn', text: `${aiText} title(s), description(s), location(s) or caption(s) were filled in automatically (by AI or from photo GPS). Read each one and correct anything that isn't exactly right — you are responsible for what you file. (They are highlighted until you edit them.)` });
   const nFiling = state.photos.filter((p) => p.filing).length;
   if (nFiling > 80) out.push({ level: 'warn', text: `${nFiling} photos in the filing PDF. A focused set (about 20–60) is easier for an officer to review.` });
   if (!out.some((o) => o.level === 'warn')) out.push({ level: 'ok', text: 'No major gaps found. Still double-check every date against your documents.' });

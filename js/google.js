@@ -117,6 +117,37 @@ export async function download(item, maxSide = 1600) {
   return r.blob();
 }
 
+/**
+ * Best-effort: read GPS from the start of the original file (EXIF lives in the
+ * first few KB). Stops after 256 KB so a large original is never downloaded in
+ * full. Returns { lat, lng } or null (Google may remove location from files).
+ */
+export async function gps(item) {
+  try {
+    const r = await fetch(`${item.mediaFile.baseUrl}=d`, {
+      headers: { Authorization: `Bearer ${token}`, Range: 'bytes=0-262143' },
+    });
+    if (!r.ok || !r.body) return null;
+    const reader = r.body.getReader();
+    const chunks = [];
+    let size = 0;
+    while (size < 262144) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      size += value.length;
+    }
+    reader.cancel().catch(() => {});
+    const buf = new Uint8Array(size);
+    let o = 0;
+    for (const c of chunks) { buf.set(c.subarray(0, Math.min(c.length, size - o)), o); o += c.length; }
+    const g = await window.exifr.gps(buf);
+    return g && Number.isFinite(g.latitude) && (g.latitude || g.longitude) ? { lat: g.latitude, lng: g.longitude } : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function endSession(id) {
   try { await api('DELETE', `/sessions/${id}`); } catch { /* best effort */ }
 }

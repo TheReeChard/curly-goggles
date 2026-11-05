@@ -5,6 +5,7 @@ import { fromFiles } from './importers.js';
 import { EVENT_TYPES, regroup, select, checks, fmtRange, fmtDate, ymd, uid, sortEvents } from './curate.js';
 import { filingPdf, keepsakePdf } from './pdf.js';
 import { runAI, key as aiKey, PROVIDERS } from './ai.js';
+import { fillLocations } from './places.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -12,7 +13,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 const state = {
   project: { petitioner: '', beneficiary: '', receipt: '', title: '', story: '' },
-  settings: { filingPerEvent: 3, filingMax: 60, keepsakePerEvent: 12, autoAI: true, aiProvider: 'anthropic', aiModels: {} },
+  settings: { filingPerEvent: 3, filingMax: 60, keepsakePerEvent: 12, autoAI: true, aiProvider: 'anthropic', aiModels: {}, placeNames: true },
   photos: [],
   events: [],
 };
@@ -76,6 +77,7 @@ async function importItems(items, getBlob) {
       const it = queue.shift();
       try {
         const blob = it.blob || (await getBlob(it));
+        if (it.getGps && it.lat == null) Object.assign(it, (await it.getGps()) || {});
         const bmp = await decode(blob);
         const full = resize(bmp, 1600);
         const thumb = resize(full, 360);
@@ -103,7 +105,16 @@ async function importItems(items, getBlob) {
   refresh();
   progress(0, 0);
   toast(`Added ${done - failed} photo${done - failed === 1 ? '' : 's'}${failed ? ` (${failed} couldn't be read)` : ''}.`);
+  await autoPlaces();
   if (currentKey() && state.settings.autoAI) await doAI();
+}
+
+// ---------- place names ----------
+async function autoPlaces() {
+  if (!state.settings.placeNames) return;
+  if (!state.photos.some((p) => p.lat != null)) return;
+  const n = await fillLocations(state);
+  if (n) { refresh(); toast(`Added the location to ${n} event${n === 1 ? '' : 's'} from photo GPS. Check them.`); }
 }
 
 // ---------- AI ----------
@@ -177,6 +188,8 @@ function setupAI() {
   input.onchange = () => { apply(); loadModels(); };
   remember.onchange = apply;
   $('#ai-model').onchange = (e) => { state.settings.aiModels[provider()] = e.target.value; save(); };
+  $('#place-names').checked = state.settings.placeNames;
+  $('#place-names').onchange = (e) => { state.settings.placeNames = e.target.checked; save(); if (e.target.checked) autoPlaces(); };
   $('#ai-auto').checked = state.settings.autoAI;
   $('#ai-auto').onchange = (e) => { state.settings.autoAI = e.target.checked; save(); };
   $('#ai-run').onclick = () => { apply(); doAI(); };
@@ -248,6 +261,7 @@ function setupGoogle() {
         source: 'google',
         takenAt: m.createTime ? Date.parse(m.createTime) : null,
         item: m,
+        getGps: () => G.gps(m),
       }));
       await importItems(items, (it) => G.download(it.item));
       status('Done. You can pick more photos any time.');
@@ -311,7 +325,7 @@ function renderEvents() {
       <div class="ev-fields">
         <label>From<input type="date" data-k="start" value="${esc(e.start)}"></label>
         <label>To<input type="date" data-k="end" value="${esc(e.end)}"></label>
-        <label class="grow">Where<input data-k="location" value="${esc(e.location)}" placeholder="City, country"></label>
+        <label class="grow">Where<input class="${e.ai?.location ? 'ai' : ''}" data-k="location" value="${esc(e.location)}" placeholder="City, country"></label>
       </div>
       <textarea class="${e.ai?.description ? 'ai' : ''}" data-k="description" rows="2" placeholder="What happened? Who was there?">${esc(e.description)}</textarea>
       <input data-k="documents" value="${esc(e.documents)}" placeholder="Documents for this event (e.g. boarding passes, lease, receipts)">
