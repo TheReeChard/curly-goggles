@@ -224,6 +224,8 @@ function setupGoogle() {
     let session;
     try {
       session = await G.pick(win, status);
+      if (session.videos) toast(`Skipped ${session.videos} video${session.videos === 1 ? "" : "s"}. Only photos can go in the PDFs.`, 6000);
+      if (!session.items.length) { status("No photos were selected, only videos."); return; }
       status(`Downloading ${session.items.length} photos…`);
       const items = session.items.map((m) => ({
         key: `gp:${m.id}`,

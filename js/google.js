@@ -91,7 +91,8 @@ export async function pick(win, onStatus) {
       pageToken = page.nextPageToken || '';
       onStatus(`Found ${items.length} items…`);
     } while (pageToken);
-    return { sessionId: session.id, items: items.filter((i) => i.type !== 'VIDEO') };
+    const photos = items.filter((i) => i.type !== 'VIDEO');
+    return { sessionId: session.id, items: photos, videos: items.length - photos.length };
   } catch (e) {
     endSession(session.id);
     throw e;
