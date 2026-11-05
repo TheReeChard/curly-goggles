@@ -61,7 +61,10 @@ async function build(entries) {
       lng: meta.lng,
     });
   }
-  return { items, skipped };
+  // Every Takeout sidecar's date + location, so photos already picked through
+  // Google (which come without location) can get it from a Takeout export.
+  const geo = [...sidecars].map(([name, j]) => ({ name, ...fromSidecar(j) })).filter((g) => g.lat != null);
+  return { items, skipped, geo };
 }
 
 export async function fromFiles(fileList) {

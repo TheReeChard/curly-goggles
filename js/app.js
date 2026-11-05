@@ -68,6 +68,7 @@ function progress(done, total, text) {
 // ---------- import pipeline ----------
 let importing = false;
 async function importItems(items, getBlob) {
+  let gpsHits = 0, gpsMisses = 0;
   const known = new Set(state.photos.map((p) => p.key));
   const todo = items.filter((it) => !known.has(it.key));
   if (!todo.length) { progress(0, 0); toast('Those photos are already in your timeline.'); return; }
@@ -80,7 +81,11 @@ async function importItems(items, getBlob) {
       const it = queue.shift();
       try {
         const blob = it.blob || (await getBlob(it));
-        if (it.getGps && it.lat == null) Object.assign(it, (await it.getGps()) || {});
+        // Google usually strips location; stop asking after 8 misses in a row with no hits.
+        if (it.getGps && it.lat == null && !(gpsMisses >= 8 && !gpsHits)) {
+          const g = await it.getGps();
+          if (g) { Object.assign(it, g); gpsHits++; } else gpsMisses++;
+        }
         const bmp = await decode(blob);
         const full = resize(bmp, 1600);
         const thumb = resize(full, 360);
@@ -263,13 +268,43 @@ function setupAI() {
   showProvider();
 }
 
+// Same photo = same file name and taken within 36 hours (time zones differ between sources).
+function findSame(it) {
+  const name = (it.name || '').toLowerCase();
+  if (!name) return null;
+  return state.photos.find((p) => (p.name || '').toLowerCase() === name
+    && (p.takenAt == null || it.takenAt == null || Math.abs(p.takenAt - it.takenAt) < 36 * 3600e3)) || null;
+}
+function applyGeo(list) {
+  let n = 0;
+  for (const g of list) {
+    const p = findSame(g);
+    if (p && p.lat == null && g.lat != null) { p.lat = g.lat; p.lng = g.lng; n++; }
+  }
+  return n;
+}
+
 async function handleFiles(files) {
   if (importing || !files?.length) return;
   progress(0, 1, 'Reading files…');
   try {
-    const { items, skipped } = await fromFiles(files);
+    const { items: all, skipped, geo } = await fromFiles(files);
+    // Photos already in the timeline (e.g. picked through Google, which strips
+    // location): don't import them twice, but take their location from these files.
+    const located = applyGeo([...geo, ...all.filter((it) => it.lat != null)]);
+    const items = all.filter((it) => !findSame(it));
+    if (located) {
+      regroup(state);
+      refresh();
+      await autoPlaces();
+      toast(`Added the location to ${located} photo${located === 1 ? '' : 's'} already in your timeline.`, 6000);
+    }
     if (skipped.length) toast(`${skipped.length} HEIC photo(s) skipped — this browser can't open them. Download them from Google Photos as JPG, or use Google sign-in.`, 8000);
-    if (!items.length) { progress(0, 0); if (!skipped.length) toast('No photos found in those files.'); return; }
+    if (!items.length) {
+      progress(0, 0);
+      if (!located && !skipped.length) toast(all.length ? 'Those photos are already in your timeline.' : 'No photos found in those files.');
+      return;
+    }
     await importItems(items);
   } catch (e) {
     progress(0, 0);

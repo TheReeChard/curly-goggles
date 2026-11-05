@@ -100,5 +100,6 @@ python3 -m http.server 8000
 
 - iPhone HEIC files can't be opened by most browsers when added as files. Google sign-in avoids this, because Google returns those photos as JPG.
 - For 1,000+ photos, use a laptop or desktop. Phones can run out of memory while making a large keepsake PDF.
+- **Google Photos removes location from photos apps download through its API**, so photos picked with Google sign-in come without GPS. To add it, export the same photos with Google Takeout and drop the export (or just its `.json` files) onto the page: photos already in the timeline aren't added twice, they only get their location.
 - Event locations are filled in from photo GPS when the files have it: local photos, Takeout exports, and Google Photos when Google keeps the location in the original file. Place names come from OpenStreetMap, which receives one rounded coordinate per event. You can turn this off in the AI box.
 - Face detection uses Google's MediaPipe model, which runs inside your browser. If it can't load, photos are ranked on sharpness and lighting only.
